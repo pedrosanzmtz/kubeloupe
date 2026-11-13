@@ -1,9 +1,15 @@
+// Table headers keep the literal column names inline with their widths.
+#![allow(clippy::print_literal)]
+
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use futures::{AsyncBufReadExt, TryStreamExt};
 use k8s_openapi::api::core::v1::{Event, Namespace, Node, Pod};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
-use kube::api::{Api, ApiResource, AttachParams, AttachedProcess, DynamicObject, ListParams, LogParams, Patch, PatchParams};
+use kube::api::{
+    Api, ApiResource, AttachParams, AttachedProcess, DynamicObject, ListParams, LogParams, Patch,
+    PatchParams,
+};
 use kube::config::KubeConfigOptions;
 use kube::core::GroupVersionKind;
 use kube::Client;
@@ -44,9 +50,13 @@ pub async fn client() -> Result<Client> {
 /// Whether the kubeconfig sets a proxy-url for the given context's cluster
 /// (`None` = the kubeconfig's current-context).
 fn kubeconfig_sets_proxy(context: Option<&str>) -> bool {
-    let Ok(kubeconfig) = kube::config::Kubeconfig::read() else {
-        return false;
-    };
+    match kube::config::Kubeconfig::read() {
+        Ok(kubeconfig) => kubeconfig_has_proxy(&kubeconfig, context),
+        Err(_) => false,
+    }
+}
+
+fn kubeconfig_has_proxy(kubeconfig: &kube::config::Kubeconfig, context: Option<&str>) -> bool {
     let current = match context {
         Some(name) => name.to_string(),
         None => match kubeconfig.current_context.clone() {
@@ -263,11 +273,7 @@ pub async fn get_nodes(client: &Client) -> Result<Vec<NodeInfo>> {
 }
 
 /// Fetch one pod's details: identity, labels and per-container state.
-pub async fn get_pod_details(
-    client: &Client,
-    namespace: &str,
-    name: &str,
-) -> Result<PodDetail> {
+pub async fn get_pod_details(client: &Client, namespace: &str, name: &str) -> Result<PodDetail> {
     let pods: Api<Pod> = Api::namespaced(client.clone(), namespace);
     let pod = pods.get(name).await?;
     let meta = pod.metadata;
@@ -410,7 +416,7 @@ pub async fn get_overview(client: &Client) -> Result<Overview> {
         *by_namespace.entry(pod.namespace.clone()).or_insert(0) += 1;
     }
     let mut pods_by_namespace: Vec<(String, usize)> = by_namespace.into_iter().collect();
-    pods_by_namespace.sort_by(|a, b| b.1.cmp(&a.1));
+    pods_by_namespace.sort_by_key(|b| std::cmp::Reverse(b.1));
 
     Ok(Overview {
         namespaces: namespaces.len(),
@@ -460,14 +466,17 @@ async fn get_events(client: &Client) -> Result<Vec<EventInfo>> {
             )
         })
         .collect();
-    infos.sort_by(|a, b| b.0.cmp(&a.0));
+    infos.sort_by_key(|b| std::cmp::Reverse(b.0));
     Ok(infos.into_iter().take(15).map(|(_, info)| info).collect())
 }
 
 /// List pods, optionally scoped to one namespace (CLI output).
 pub async fn list_pods(client: &Client, namespace: Option<&str>) -> Result<()> {
     let pods = get_pods(client, namespace).await?;
-    println!("{:<50} {:<20} {:<12} {:<10} {}", "NAME", "NAMESPACE", "PHASE", "NODE", "AGE");
+    println!(
+        "{:<50} {:<20} {:<12} {:<10} {}",
+        "NAME", "NAMESPACE", "PHASE", "NODE", "AGE"
+    );
     for pod in pods {
         println!(
             "{:<50} {:<20} {:<12} {:<10} {}",
@@ -501,7 +510,12 @@ pub async fn list_nodes(client: &Client) -> Result<()> {
 }
 
 /// Print the last lines of a pod's logs (CLI output).
-pub async fn print_pod_logs(client: &Client, namespace: Option<&str>, name: &str, tail: i64) -> Result<()> {
+pub async fn print_pod_logs(
+    client: &Client,
+    namespace: Option<&str>,
+    name: &str,
+    tail: i64,
+) -> Result<()> {
     let logs = get_pod_logs(client, namespace.unwrap_or("default"), name, tail).await?;
     print!("{logs}");
     Ok(())
@@ -516,7 +530,9 @@ pub async fn print_pod_logs(client: &Client, namespace: Option<&str>, name: &str
 pub fn parse_cpu_quantity(s: &str) -> Option<u64> {
     let s = s.trim();
     if let Some(v) = s.strip_suffix('n') {
-        v.parse::<f64>().ok().map(|n| (n / 1_000_000.0).round() as u64)
+        v.parse::<f64>()
+            .ok()
+            .map(|n| (n / 1_000_000.0).round() as u64)
     } else if let Some(v) = s.strip_suffix('u') {
         v.parse::<f64>().ok().map(|u| (u / 1_000.0).round() as u64)
     } else if let Some(v) = s.strip_suffix('m') {
@@ -578,7 +594,11 @@ pub fn format_memory(bytes: u64) -> String {
         format!("{bytes}B")
     } else {
         let text = format!("{value:.2}");
-        format!("{}{}", text.trim_end_matches('0').trim_end_matches('.'), UNITS[unit])
+        format!(
+            "{}{}",
+            text.trim_end_matches('0').trim_end_matches('.'),
+            UNITS[unit]
+        )
     }
 }
 
@@ -617,7 +637,8 @@ fn is_not_found(e: &kube::Error) -> bool {
 
 /// Fetch per-pod CPU/memory usage. `Ok(None)` = metrics API unavailable.
 pub async fn get_pod_metrics(client: &Client) -> Result<Option<Vec<PodUsage>>> {
-    let api: Api<DynamicObject> = Api::all_with(client.clone(), &metrics_resource("PodMetrics", "pods"));
+    let api: Api<DynamicObject> =
+        Api::all_with(client.clone(), &metrics_resource("PodMetrics", "pods"));
     let list = match api.list(&ListParams::default()).await {
         Ok(list) => list,
         Err(e) if is_not_found(&e) => return Ok(None),
@@ -644,7 +665,12 @@ pub async fn get_pod_metrics(client: &Client) -> Result<Option<Vec<PodUsage>>> {
                     .unwrap_or(0);
             }
         }
-        usages.push(PodUsage { namespace, name, cpu_millicores: cpu, memory_bytes: memory });
+        usages.push(PodUsage {
+            namespace,
+            name,
+            cpu_millicores: cpu,
+            memory_bytes: memory,
+        });
     }
     Ok(Some(usages))
 }
@@ -888,9 +914,14 @@ pub async fn serve_port_forward(
 /// Print `kubectl top pods`-style usage (CLI output).
 pub async fn print_top_pods(client: &Client) -> Result<()> {
     match get_pod_metrics(client).await? {
-        None => println!("Metrics API not available on this cluster (is metrics-server installed?)"),
+        None => {
+            println!("Metrics API not available on this cluster (is metrics-server installed?)")
+        }
         Some(usages) => {
-            println!("{:<50} {:<20} {:<10} {}", "NAME", "NAMESPACE", "CPU", "MEMORY");
+            println!(
+                "{:<50} {:<20} {:<10} {}",
+                "NAME", "NAMESPACE", "CPU", "MEMORY"
+            );
             for u in usages {
                 println!(
                     "{:<50} {:<20} {:<10} {}",
@@ -908,7 +939,9 @@ pub async fn print_top_pods(client: &Client) -> Result<()> {
 /// Print `kubectl top nodes`-style usage (CLI output).
 pub async fn print_top_nodes(client: &Client) -> Result<()> {
     match get_node_metrics(client).await? {
-        None => println!("Metrics API not available on this cluster (is metrics-server installed?)"),
+        None => {
+            println!("Metrics API not available on this cluster (is metrics-server installed?)")
+        }
         Some(usages) => {
             println!("{:<40} {:<16} {}", "NAME", "CPU", "MEMORY");
             for u in usages {
@@ -945,7 +978,12 @@ pub async fn print_pod_yaml(client: &Client, namespace: Option<&str>, name: &str
 }
 
 /// Forward a pod port to localhost until Ctrl-C (CLI output).
-pub async fn run_port_forward(client: &Client, namespace: Option<&str>, name: &str, port: u16) -> Result<()> {
+pub async fn run_port_forward(
+    client: &Client,
+    namespace: Option<&str>,
+    name: &str,
+    port: u16,
+) -> Result<()> {
     let (local_port, handle) =
         serve_port_forward(client, namespace.unwrap_or("default"), name, port).await?;
     println!("Forwarding from 127.0.0.1:{local_port} -> {name}:{port} (Ctrl-C to stop)");
@@ -956,13 +994,21 @@ pub async fn run_port_forward(client: &Client, namespace: Option<&str>, name: &s
 }
 
 /// Run a command in a pod and print its output (CLI output).
-pub async fn exec_in_pod(client: &Client, 
+pub async fn exec_in_pod(
+    client: &Client,
     namespace: Option<&str>,
     name: &str,
     container: Option<&str>,
     command: &[String],
 ) -> Result<()> {
-    let result = exec_command(client, namespace.unwrap_or("default"), name, container, command).await?;
+    let result = exec_command(
+        client,
+        namespace.unwrap_or("default"),
+        name,
+        container,
+        command,
+    )
+    .await?;
     print!("{}", result.stdout);
     eprint!("{}", result.stderr);
     if !result.success {
@@ -1005,5 +1051,50 @@ mod tests {
         assert_eq!(format_memory(128 * 1024 * 1024), "128Mi");
         assert_eq!(format_memory(1024 * 1024 * 1024), "1Gi");
         assert_eq!(format_memory(512), "512B");
+    }
+
+    fn sample_kubeconfig() -> kube::config::Kubeconfig {
+        kube::config::Kubeconfig::from_yaml(
+            r#"
+apiVersion: v1
+kind: Config
+current-context: proxied
+contexts:
+- name: proxied
+  context: {cluster: with-proxy, user: u}
+- name: direct
+  context: {cluster: no-proxy, user: u}
+clusters:
+- name: with-proxy
+  cluster: {server: "https://a.example", proxy-url: "http://127.0.0.1:8080"}
+- name: no-proxy
+  cluster: {server: "https://b.example"}
+users:
+- name: u
+  user: {}
+"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn proxy_detection() {
+        let kc = sample_kubeconfig();
+        assert!(kubeconfig_has_proxy(&kc, None));
+        assert!(kubeconfig_has_proxy(&kc, Some("proxied")));
+        assert!(!kubeconfig_has_proxy(&kc, Some("direct")));
+        assert!(!kubeconfig_has_proxy(&kc, Some("missing")));
+    }
+
+    #[test]
+    fn age_formatting() {
+        let ago = |s: i64| format_age(Utc::now() - chrono::Duration::seconds(s));
+        assert_eq!(ago(5), "5s");
+        assert_eq!(ago(120), "2m");
+        assert_eq!(ago(7_300), "2h");
+        assert_eq!(ago(3 * 86_400 + 10), "3d");
+        // Timestamps in the future clamp to zero.
+        assert_eq!(ago(-100), "0s");
+        assert_eq!(age_of(None), "");
     }
 }

@@ -4,11 +4,10 @@ use futures::SinkExt;
 use kube::api::TerminalSize;
 use kube::Client;
 use kubeloupe::{
-    client_for_context,
-    apply_pod_yaml, exec_pod, get_namespaces, get_node_metrics, get_nodes, get_overview,
-    get_pod_details, get_pod_metrics, get_pod_yaml, get_pods, list_contexts, serve_port_forward,
-    stream_pod_logs, ContextInfo, NamespaceInfo, NodeInfo, NodeUsage, Overview, PodDetail, PodInfo,
-    PodUsage,
+    apply_pod_yaml, client_for_context, exec_pod, get_namespaces, get_node_metrics, get_nodes,
+    get_overview, get_pod_details, get_pod_metrics, get_pod_yaml, get_pods, list_contexts,
+    serve_port_forward, stream_pod_logs, ContextInfo, NamespaceInfo, NodeInfo, NodeUsage, Overview,
+    PodDetail, PodInfo, PodUsage,
 };
 use serde::Serialize;
 use std::collections::HashMap;
@@ -20,7 +19,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
 
 fn next_session(prefix: &str) -> String {
-    format!("{}-{}", prefix, NEXT_SESSION.fetch_add(1, Ordering::Relaxed))
+    format!(
+        "{}-{}",
+        prefix,
+        NEXT_SESSION.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 struct ExecSession {
@@ -103,9 +106,7 @@ async fn cmd_list_pods(
 #[tauri::command]
 async fn cmd_list_namespaces(state: State<'_, AppState>) -> Result<Vec<NamespaceInfo>, String> {
     let client = client(&state).await?;
-    get_namespaces(&client)
-        .await
-        .map_err(|e| e.to_string())
+    get_namespaces(&client).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -172,10 +173,7 @@ struct MetricsSnapshot {
 #[tauri::command]
 async fn cmd_get_metrics(state: State<'_, AppState>) -> Result<MetricsSnapshot, String> {
     let client = client(&state).await?;
-    let (pods, nodes) = tokio::join!(
-        get_pod_metrics(&client),
-        get_node_metrics(&client),
-    );
+    let (pods, nodes) = tokio::join!(get_pod_metrics(&client), get_node_metrics(&client),);
     let pods = pods.map_err(|e| e.to_string())?;
     let nodes = nodes.map_err(|e| e.to_string())?;
     let available = pods.is_some() || nodes.is_some();
@@ -198,10 +196,7 @@ async fn cmd_list_contexts(state: State<'_, AppState>) -> Result<Vec<ContextInfo
 }
 
 #[tauri::command]
-async fn cmd_set_context(
-    state: State<'_, AppState>,
-    name: Option<String>,
-) -> Result<(), String> {
+async fn cmd_set_context(state: State<'_, AppState>, name: Option<String>) -> Result<(), String> {
     stop_log_stream(&state);
     stop_all_exec(&state);
     stop_all_forwards(&state);
@@ -240,7 +235,12 @@ async fn cmd_exec_start(
     let mut stderr_reader = attached.stderr();
     let mut size_tx = attached.terminal_size();
     if let Some(tx) = size_tx.as_mut() {
-        let _ = tx.send(TerminalSize { width: cols, height: rows }).await;
+        let _ = tx
+            .send(TerminalSize {
+                width: cols,
+                height: rows,
+            })
+            .await;
     }
     let session_id = session.clone();
     let app_out = app.clone();
@@ -327,7 +327,11 @@ async fn cmd_exec_start(
     });
     state.exec_sessions.lock().unwrap().insert(
         session.clone(),
-        ExecSession { stdin_tx, size_tx, task },
+        ExecSession {
+            stdin_tx,
+            size_tx,
+            task,
+        },
     );
     Ok(session)
 }
@@ -366,9 +370,12 @@ async fn cmd_exec_resize(
             .and_then(|entry| entry.size_tx.clone())
     };
     if let Some(mut tx) = tx {
-        tx.send(TerminalSize { width: cols, height: rows })
-            .await
-            .map_err(|e| e.to_string())?;
+        tx.send(TerminalSize {
+            width: cols,
+            height: rows,
+        })
+        .await
+        .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -410,7 +417,10 @@ async fn cmd_portforward_start(
             task,
         },
     );
-    Ok(PortForwardInfo { session, local_port })
+    Ok(PortForwardInfo {
+        session,
+        local_port,
+    })
 }
 
 #[tauri::command]
