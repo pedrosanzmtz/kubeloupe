@@ -32,10 +32,9 @@ jobs:
 
       - name: Wait for demo pods
         run: |
+          # setup.sh already waited for the web/logger rollouts.
           kubectl --context kind-kubeloupe-test -n demo wait --for=condition=Ready \
-            pod/multi pod -l app=web --timeout=180s
-          kubectl --context kind-kubeloupe-test -n demo wait --for=condition=Ready \
-            pod -l app=logger --timeout=180s
+            pod/multi --timeout=180s
 
       - name: Integration tests
         run: cargo test -- --ignored --test-threads=4
