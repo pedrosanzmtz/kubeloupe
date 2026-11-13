@@ -2,7 +2,9 @@
 
 use futures::SinkExt;
 use kube::api::TerminalSize;
+use kube::Client;
 use kubeloupe::{
+    client_for_context,
     apply_pod_yaml, exec_pod, get_namespaces, get_node_metrics, get_nodes, get_overview,
     get_pod_details, get_pod_metrics, get_pod_yaml, get_pods, list_contexts, serve_port_forward,
     stream_pod_logs, ContextInfo, NamespaceInfo, NodeInfo, NodeUsage, Overview, PodDetail, PodInfo,
@@ -38,6 +40,9 @@ struct ForwardSession {
 struct AppState {
     /// Selected context (`None` = the kubeconfig's current-context).
     context: Mutex<Option<String>>,
+    /// Client for the selected context, built lazily and dropped when the
+    /// context changes. `Client` is cheap to clone.
+    client: tokio::sync::Mutex<Option<Client>>,
     /// The running log stream, if any.
     log_task: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     /// Open terminal sessions, by session id.
@@ -48,6 +53,20 @@ struct AppState {
 
 fn selected_context(state: &State<'_, AppState>) -> Option<String> {
     state.context.lock().unwrap().clone()
+}
+
+/// The cached client for the selected context, building it on first use.
+async fn client(state: &State<'_, AppState>) -> Result<Client, String> {
+    let mut slot = state.client.lock().await;
+    if let Some(c) = slot.as_ref() {
+        return Ok(c.clone());
+    }
+    let ctx = selected_context(state);
+    let c = client_for_context(ctx.as_deref())
+        .await
+        .map_err(|e| e.to_string())?;
+    *slot = Some(c.clone());
+    Ok(c)
 }
 
 fn stop_log_stream(state: &State<'_, AppState>) {
@@ -75,24 +94,24 @@ async fn cmd_list_pods(
     state: State<'_, AppState>,
     namespace: Option<String>,
 ) -> Result<Vec<PodInfo>, String> {
-    let ctx = selected_context(&state);
-    get_pods(ctx.as_deref(), namespace.as_deref())
+    let client = client(&state).await?;
+    get_pods(&client, namespace.as_deref())
         .await
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 async fn cmd_list_namespaces(state: State<'_, AppState>) -> Result<Vec<NamespaceInfo>, String> {
-    let ctx = selected_context(&state);
-    get_namespaces(ctx.as_deref())
+    let client = client(&state).await?;
+    get_namespaces(&client)
         .await
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 async fn cmd_list_nodes(state: State<'_, AppState>) -> Result<Vec<NodeInfo>, String> {
-    let ctx = selected_context(&state);
-    get_nodes(ctx.as_deref()).await.map_err(|e| e.to_string())
+    let client = client(&state).await?;
+    get_nodes(&client).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -101,8 +120,8 @@ async fn cmd_get_pod_details(
     namespace: String,
     name: String,
 ) -> Result<PodDetail, String> {
-    let ctx = selected_context(&state);
-    get_pod_details(ctx.as_deref(), &namespace, &name)
+    let client = client(&state).await?;
+    get_pod_details(&client, &namespace, &name)
         .await
         .map_err(|e| e.to_string())
 }
@@ -115,10 +134,10 @@ async fn cmd_stream_pod_logs(
     name: String,
 ) -> Result<(), String> {
     stop_log_stream(&state);
-    let ctx = selected_context(&state);
+    let client = client(&state).await?;
     let handle = tauri::async_runtime::spawn(async move {
         let emitter = app.clone();
-        let result = stream_pod_logs(ctx.as_deref(), &namespace, &name, None, move |line| {
+        let result = stream_pod_logs(&client, &namespace, &name, None, move |line| {
             let _ = emitter.emit("pod-log", line);
         })
         .await;
@@ -139,8 +158,8 @@ async fn cmd_stop_pod_logs(state: State<'_, AppState>) -> Result<(), String> {
 
 #[tauri::command]
 async fn cmd_get_overview(state: State<'_, AppState>) -> Result<Overview, String> {
-    let ctx = selected_context(&state);
-    get_overview(ctx.as_deref()).await.map_err(|e| e.to_string())
+    let client = client(&state).await?;
+    get_overview(&client).await.map_err(|e| e.to_string())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -152,10 +171,10 @@ struct MetricsSnapshot {
 
 #[tauri::command]
 async fn cmd_get_metrics(state: State<'_, AppState>) -> Result<MetricsSnapshot, String> {
-    let ctx = selected_context(&state);
+    let client = client(&state).await?;
     let (pods, nodes) = tokio::join!(
-        get_pod_metrics(ctx.as_deref()),
-        get_node_metrics(ctx.as_deref()),
+        get_pod_metrics(&client),
+        get_node_metrics(&client),
     );
     let pods = pods.map_err(|e| e.to_string())?;
     let nodes = nodes.map_err(|e| e.to_string())?;
@@ -187,6 +206,7 @@ async fn cmd_set_context(
     stop_all_exec(&state);
     stop_all_forwards(&state);
     *state.context.lock().unwrap() = name;
+    *state.client.lock().await = None;
     Ok(())
 }
 
@@ -209,8 +229,8 @@ async fn cmd_exec_start(
     cols: u16,
     rows: u16,
 ) -> Result<String, String> {
-    let ctx = selected_context(&state);
-    let mut attached = exec_pod(ctx.as_deref(), &namespace, &name, container.as_deref())
+    let client = client(&state).await?;
+    let mut attached = exec_pod(&client, &namespace, &name, container.as_deref())
         .await
         .map_err(|e| e.to_string())?;
     let session = next_session("exec");
@@ -377,8 +397,8 @@ async fn cmd_portforward_start(
     name: String,
     port: u16,
 ) -> Result<PortForwardInfo, String> {
-    let ctx = selected_context(&state);
-    let (local_port, task) = serve_port_forward(ctx.as_deref(), &namespace, &name, port)
+    let client = client(&state).await?;
+    let (local_port, task) = serve_port_forward(&client, &namespace, &name, port)
         .await
         .map_err(|e| e.to_string())?;
     let session = next_session("pf");
@@ -408,8 +428,8 @@ async fn cmd_get_pod_yaml(
     namespace: String,
     name: String,
 ) -> Result<String, String> {
-    let ctx = selected_context(&state);
-    get_pod_yaml(ctx.as_deref(), &namespace, &name)
+    let client = client(&state).await?;
+    get_pod_yaml(&client, &namespace, &name)
         .await
         .map_err(|e| e.to_string())
 }
@@ -421,8 +441,8 @@ async fn cmd_apply_pod_yaml(
     name: String,
     yaml: String,
 ) -> Result<(), String> {
-    let ctx = selected_context(&state);
-    apply_pod_yaml(ctx.as_deref(), &namespace, &name, &yaml)
+    let client = client(&state).await?;
+    apply_pod_yaml(&client, &namespace, &name, &yaml)
         .await
         .map_err(|e| e.to_string())
 }
@@ -431,6 +451,7 @@ fn main() {
     tauri::Builder::default()
         .manage(AppState {
             context: Mutex::new(None),
+            client: tokio::sync::Mutex::new(None),
             log_task: Mutex::new(None),
             exec_sessions: Mutex::new(HashMap::new()),
             forwards: Mutex::new(HashMap::new()),

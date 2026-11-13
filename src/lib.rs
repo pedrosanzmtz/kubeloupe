@@ -178,11 +178,10 @@ pub async fn list_contexts() -> Result<Vec<ContextInfo>> {
 }
 
 /// Fetch pods, optionally scoped to one namespace.
-pub async fn get_pods(context: Option<&str>, namespace: Option<&str>) -> Result<Vec<PodInfo>> {
-    let client = client_for_context(context).await?;
+pub async fn get_pods(client: &Client, namespace: Option<&str>) -> Result<Vec<PodInfo>> {
     let pods: Api<Pod> = match namespace {
-        Some(ns) => Api::namespaced(client, ns),
-        None => Api::all(client),
+        Some(ns) => Api::namespaced(client.clone(), ns),
+        None => Api::all(client.clone()),
     };
     let list = pods.list(&ListParams::default()).await?;
     Ok(list
@@ -210,9 +209,8 @@ pub async fn get_pods(context: Option<&str>, namespace: Option<&str>) -> Result<
 }
 
 /// Fetch all namespaces in the cluster.
-pub async fn get_namespaces(context: Option<&str>) -> Result<Vec<NamespaceInfo>> {
-    let client = client_for_context(context).await?;
-    let namespaces: Api<Namespace> = Api::all(client);
+pub async fn get_namespaces(client: &Client) -> Result<Vec<NamespaceInfo>> {
+    let namespaces: Api<Namespace> = Api::all(client.clone());
     let list = namespaces.list(&ListParams::default()).await?;
     Ok(list
         .items
@@ -233,9 +231,8 @@ pub async fn get_namespaces(context: Option<&str>) -> Result<Vec<NamespaceInfo>>
 }
 
 /// Fetch all nodes in the cluster.
-pub async fn get_nodes(context: Option<&str>) -> Result<Vec<NodeInfo>> {
-    let client = client_for_context(context).await?;
-    let nodes: Api<Node> = Api::all(client);
+pub async fn get_nodes(client: &Client) -> Result<Vec<NodeInfo>> {
+    let nodes: Api<Node> = Api::all(client.clone());
     let list = nodes.list(&ListParams::default()).await?;
     Ok(list
         .items
@@ -267,12 +264,11 @@ pub async fn get_nodes(context: Option<&str>) -> Result<Vec<NodeInfo>> {
 
 /// Fetch one pod's details: identity, labels and per-container state.
 pub async fn get_pod_details(
-    context: Option<&str>,
+    client: &Client,
     namespace: &str,
     name: &str,
 ) -> Result<PodDetail> {
-    let client = client_for_context(context).await?;
-    let pods: Api<Pod> = Api::namespaced(client, namespace);
+    let pods: Api<Pod> = Api::namespaced(client.clone(), namespace);
     let pod = pods.get(name).await?;
     let meta = pod.metadata;
     let images: BTreeMap<String, String> = pod
@@ -357,13 +353,12 @@ pub async fn get_pod_details(
 
 /// Fetch the last lines of a pod's logs (non-streaming, for the CLI).
 pub async fn get_pod_logs(
-    context: Option<&str>,
+    client: &Client,
     namespace: &str,
     name: &str,
     tail_lines: i64,
 ) -> Result<String> {
-    let client = client_for_context(context).await?;
-    let pods: Api<Pod> = Api::namespaced(client, namespace);
+    let pods: Api<Pod> = Api::namespaced(client.clone(), namespace);
     let params = LogParams {
         tail_lines: Some(tail_lines),
         ..LogParams::default()
@@ -374,7 +369,7 @@ pub async fn get_pod_logs(
 /// Stream a pod's logs, calling `on_line` for each line. Runs until the
 /// stream ends (or the caller drops the future).
 pub async fn stream_pod_logs<F>(
-    context: Option<&str>,
+    client: &Client,
     namespace: &str,
     name: &str,
     container: Option<&str>,
@@ -383,8 +378,7 @@ pub async fn stream_pod_logs<F>(
 where
     F: FnMut(String) + Send,
 {
-    let client = client_for_context(context).await?;
-    let pods: Api<Pod> = Api::namespaced(client, namespace);
+    let pods: Api<Pod> = Api::namespaced(client.clone(), namespace);
     let params = LogParams {
         follow: true,
         tail_lines: Some(200),
@@ -399,12 +393,12 @@ where
 }
 
 /// Fetch cluster overview: counts, pods by namespace, recent events.
-pub async fn get_overview(context: Option<&str>) -> Result<Overview> {
+pub async fn get_overview(client: &Client) -> Result<Overview> {
     let (pods, namespaces, nodes, events) = tokio::join!(
-        get_pods(context, None),
-        get_namespaces(context),
-        get_nodes(context),
-        get_events(context),
+        get_pods(client, None),
+        get_namespaces(client),
+        get_nodes(client),
+        get_events(client),
     );
     let pods = pods?;
     let namespaces = namespaces?;
@@ -434,9 +428,8 @@ pub async fn get_overview(context: Option<&str>) -> Result<Overview> {
     })
 }
 
-async fn get_events(context: Option<&str>) -> Result<Vec<EventInfo>> {
-    let client = client_for_context(context).await?;
-    let events: Api<Event> = Api::all(client);
+async fn get_events(client: &Client) -> Result<Vec<EventInfo>> {
+    let events: Api<Event> = Api::all(client.clone());
     let list = events.list(&ListParams::default()).await?;
     let mut infos: Vec<(DateTime<Utc>, EventInfo)> = list
         .items
@@ -472,8 +465,8 @@ async fn get_events(context: Option<&str>) -> Result<Vec<EventInfo>> {
 }
 
 /// List pods, optionally scoped to one namespace (CLI output).
-pub async fn list_pods(namespace: Option<&str>) -> Result<()> {
-    let pods = get_pods(None, namespace).await?;
+pub async fn list_pods(client: &Client, namespace: Option<&str>) -> Result<()> {
+    let pods = get_pods(client, namespace).await?;
     println!("{:<50} {:<20} {:<12} {:<10} {}", "NAME", "NAMESPACE", "PHASE", "NODE", "AGE");
     for pod in pods {
         println!(
@@ -485,8 +478,8 @@ pub async fn list_pods(namespace: Option<&str>) -> Result<()> {
 }
 
 /// List all namespaces in the cluster (CLI output).
-pub async fn list_namespaces() -> Result<()> {
-    let namespaces = get_namespaces(None).await?;
+pub async fn list_namespaces(client: &Client) -> Result<()> {
+    let namespaces = get_namespaces(client).await?;
     println!("{:<30} {:<10} {}", "NAME", "STATUS", "AGE");
     for ns in namespaces {
         println!("{:<30} {:<10} {}", ns.name, ns.status, ns.age);
@@ -495,8 +488,8 @@ pub async fn list_namespaces() -> Result<()> {
 }
 
 /// List all nodes in the cluster (CLI output).
-pub async fn list_nodes() -> Result<()> {
-    let nodes = get_nodes(None).await?;
+pub async fn list_nodes(client: &Client) -> Result<()> {
+    let nodes = get_nodes(client).await?;
     println!("{:<40} {:<12} {:<12} {}", "NAME", "READY", "VERSION", "AGE");
     for node in nodes {
         println!(
@@ -508,8 +501,8 @@ pub async fn list_nodes() -> Result<()> {
 }
 
 /// Print the last lines of a pod's logs (CLI output).
-pub async fn print_pod_logs(namespace: Option<&str>, name: &str, tail: i64) -> Result<()> {
-    let logs = get_pod_logs(None, namespace.unwrap_or("default"), name, tail).await?;
+pub async fn print_pod_logs(client: &Client, namespace: Option<&str>, name: &str, tail: i64) -> Result<()> {
+    let logs = get_pod_logs(client, namespace.unwrap_or("default"), name, tail).await?;
     print!("{logs}");
     Ok(())
 }
@@ -623,9 +616,8 @@ fn is_not_found(e: &kube::Error) -> bool {
 }
 
 /// Fetch per-pod CPU/memory usage. `Ok(None)` = metrics API unavailable.
-pub async fn get_pod_metrics(context: Option<&str>) -> Result<Option<Vec<PodUsage>>> {
-    let client = client_for_context(context).await?;
-    let api: Api<DynamicObject> = Api::all_with(client, &metrics_resource("PodMetrics", "pods"));
+pub async fn get_pod_metrics(client: &Client) -> Result<Option<Vec<PodUsage>>> {
+    let api: Api<DynamicObject> = Api::all_with(client.clone(), &metrics_resource("PodMetrics", "pods"));
     let list = match api.list(&ListParams::default()).await {
         Ok(list) => list,
         Err(e) if is_not_found(&e) => return Ok(None),
@@ -659,8 +651,7 @@ pub async fn get_pod_metrics(context: Option<&str>) -> Result<Option<Vec<PodUsag
 
 /// Fetch per-node CPU/memory usage with capacity. `Ok(None)` = metrics API
 /// unavailable.
-pub async fn get_node_metrics(context: Option<&str>) -> Result<Option<Vec<NodeUsage>>> {
-    let client = client_for_context(context).await?;
+pub async fn get_node_metrics(client: &Client) -> Result<Option<Vec<NodeUsage>>> {
     let api: Api<DynamicObject> =
         Api::all_with(client.clone(), &metrics_resource("NodeMetrics", "nodes"));
     let list = match api.list(&ListParams::default()).await {
@@ -668,7 +659,7 @@ pub async fn get_node_metrics(context: Option<&str>) -> Result<Option<Vec<NodeUs
         Err(e) if is_not_found(&e) => return Ok(None),
         Err(e) => return Err(e.into()),
     };
-    let nodes: Api<Node> = Api::all(client);
+    let nodes: Api<Node> = Api::all(client.clone());
     let mut capacities: BTreeMap<String, (u64, u64)> = BTreeMap::new();
     if let Ok(node_list) = nodes.list(&ListParams::default()).await {
         for node in node_list.items {
@@ -717,9 +708,8 @@ pub async fn get_node_metrics(context: Option<&str>) -> Result<Option<Vec<NodeUs
 
 /// Fetch one pod as YAML (status and managed fields stripped, so the
 /// document is what a human would edit).
-pub async fn get_pod_yaml(context: Option<&str>, namespace: &str, name: &str) -> Result<String> {
-    let client = client_for_context(context).await?;
-    let pods: Api<Pod> = Api::namespaced(client, namespace);
+pub async fn get_pod_yaml(client: &Client, namespace: &str, name: &str) -> Result<String> {
+    let pods: Api<Pod> = Api::namespaced(client.clone(), namespace);
     let mut pod = pods.get(name).await?;
     pod.metadata.managed_fields = None;
     pod.status = None;
@@ -729,15 +719,14 @@ pub async fn get_pod_yaml(context: Option<&str>, namespace: &str, name: &str) ->
 
 /// Apply edited pod YAML with server-side apply (field manager "kubeloupe").
 pub async fn apply_pod_yaml(
-    context: Option<&str>,
+    client: &Client,
     namespace: &str,
     name: &str,
     yaml: &str,
 ) -> Result<()> {
     let value: serde_json::Value = serde_yaml::from_str(yaml)?;
-    let client = client_for_context(context).await?;
     let ar = ApiResource::from_gvk(&GroupVersionKind::gvk("", "v1", "Pod"));
-    let api: Api<DynamicObject> = Api::namespaced_with(client, namespace, &ar);
+    let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), namespace, &ar);
     api.patch(
         name,
         &PatchParams::apply("kubeloupe"),
@@ -754,13 +743,12 @@ pub async fn apply_pod_yaml(
 /// Open an interactive TTY shell (`/bin/sh`) in a pod. The caller drives
 /// stdin/stdout/stderr and the terminal size on the returned process.
 pub async fn exec_pod(
-    context: Option<&str>,
+    client: &Client,
     namespace: &str,
     name: &str,
     container: Option<&str>,
 ) -> Result<AttachedProcess> {
-    let client = client_for_context(context).await?;
-    let pods: Api<Pod> = Api::namespaced(client, namespace);
+    let pods: Api<Pod> = Api::namespaced(client.clone(), namespace);
     let mut params = AttachParams::interactive_tty();
     params.container = container.map(str::to_string);
     Ok(pods.exec(name, ["/bin/sh"], &params).await?)
@@ -775,14 +763,13 @@ pub struct ExecResult {
 
 /// Run a command in a pod (non-TTY) and collect its output.
 pub async fn exec_command(
-    context: Option<&str>,
+    client: &Client,
     namespace: &str,
     name: &str,
     container: Option<&str>,
     command: &[String],
 ) -> Result<ExecResult> {
-    let client = client_for_context(context).await?;
-    let pods: Api<Pod> = Api::namespaced(client, namespace);
+    let pods: Api<Pod> = Api::namespaced(client.clone(), namespace);
     let params = AttachParams {
         container: container.map(str::to_string),
         stdin: false,
@@ -855,21 +842,20 @@ pub async fn exec_command(
 /// local port and a handle; aborting the handle stops the listener.
 /// Fails fast when the API server cannot forward (e.g. no kubelet).
 pub async fn serve_port_forward(
-    context: Option<&str>,
+    client: &Client,
     namespace: &str,
     name: &str,
     pod_port: u16,
 ) -> Result<(u16, tokio::task::JoinHandle<()>)> {
     // Probe: fail fast instead of only failing when a client connects.
-    let client = client_for_context(context).await?;
-    let pods: Api<Pod> = Api::namespaced(client, namespace);
+    let pods: Api<Pod> = Api::namespaced(client.clone(), namespace);
     let mut probe = pods.portforward(name, &[pod_port]).await?;
     let _ = probe.take_stream(pod_port);
     probe.abort();
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let local_port = listener.local_addr()?.port();
-    let ctx_owned = context.map(str::to_string);
+    let client = client.clone();
     let ns_owned = namespace.to_string();
     let name_owned = name.to_string();
     let handle = tokio::spawn(async move {
@@ -877,13 +863,10 @@ pub async fn serve_port_forward(
             let Ok((socket, _)) = listener.accept().await else {
                 break;
             };
-            let ctx = ctx_owned.clone();
+            let client = client.clone();
             let ns = ns_owned.clone();
             let pod = name_owned.clone();
             tokio::spawn(async move {
-                let Ok(client) = client_for_context(ctx.as_deref()).await else {
-                    return;
-                };
                 let pods: Api<Pod> = Api::namespaced(client, &ns);
                 let Ok(mut pf) = pods.portforward(&pod, &[pod_port]).await else {
                     return;
@@ -903,8 +886,8 @@ pub async fn serve_port_forward(
 // ---------------------------------------------------------------------------
 
 /// Print `kubectl top pods`-style usage (CLI output).
-pub async fn print_top_pods() -> Result<()> {
-    match get_pod_metrics(None).await? {
+pub async fn print_top_pods(client: &Client) -> Result<()> {
+    match get_pod_metrics(client).await? {
         None => println!("Metrics API not available on this cluster (is metrics-server installed?)"),
         Some(usages) => {
             println!("{:<50} {:<20} {:<10} {}", "NAME", "NAMESPACE", "CPU", "MEMORY");
@@ -923,8 +906,8 @@ pub async fn print_top_pods() -> Result<()> {
 }
 
 /// Print `kubectl top nodes`-style usage (CLI output).
-pub async fn print_top_nodes() -> Result<()> {
-    match get_node_metrics(None).await? {
+pub async fn print_top_nodes(client: &Client) -> Result<()> {
+    match get_node_metrics(client).await? {
         None => println!("Metrics API not available on this cluster (is metrics-server installed?)"),
         Some(usages) => {
             println!("{:<40} {:<16} {}", "NAME", "CPU", "MEMORY");
@@ -955,16 +938,16 @@ pub async fn print_top_nodes() -> Result<()> {
 }
 
 /// Print one pod as YAML (CLI output).
-pub async fn print_pod_yaml(namespace: Option<&str>, name: &str) -> Result<()> {
-    let yaml = get_pod_yaml(None, namespace.unwrap_or("default"), name).await?;
+pub async fn print_pod_yaml(client: &Client, namespace: Option<&str>, name: &str) -> Result<()> {
+    let yaml = get_pod_yaml(client, namespace.unwrap_or("default"), name).await?;
     print!("{yaml}");
     Ok(())
 }
 
 /// Forward a pod port to localhost until Ctrl-C (CLI output).
-pub async fn run_port_forward(namespace: Option<&str>, name: &str, port: u16) -> Result<()> {
+pub async fn run_port_forward(client: &Client, namespace: Option<&str>, name: &str, port: u16) -> Result<()> {
     let (local_port, handle) =
-        serve_port_forward(None, namespace.unwrap_or("default"), name, port).await?;
+        serve_port_forward(client, namespace.unwrap_or("default"), name, port).await?;
     println!("Forwarding from 127.0.0.1:{local_port} -> {name}:{port} (Ctrl-C to stop)");
     tokio::signal::ctrl_c().await?;
     handle.abort();
@@ -973,13 +956,13 @@ pub async fn run_port_forward(namespace: Option<&str>, name: &str, port: u16) ->
 }
 
 /// Run a command in a pod and print its output (CLI output).
-pub async fn exec_in_pod(
+pub async fn exec_in_pod(client: &Client, 
     namespace: Option<&str>,
     name: &str,
     container: Option<&str>,
     command: &[String],
 ) -> Result<()> {
-    let result = exec_command(None, namespace.unwrap_or("default"), name, container, command).await?;
+    let result = exec_command(client, namespace.unwrap_or("default"), name, container, command).await?;
     print!("{}", result.stdout);
     eprint!("{}", result.stderr);
     if !result.success {
