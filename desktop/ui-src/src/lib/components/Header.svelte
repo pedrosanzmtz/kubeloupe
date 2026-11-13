@@ -1,5 +1,12 @@
 <script lang="ts">
   import { app, refresh, switchContext } from "../stores/app.svelte";
+  import { live } from "../stores/live.svelte";
+
+  function onContextChange(name: string) {
+    // The backend drops its watches on a context switch; stop ours first.
+    live.stop();
+    return switchContext(name);
+  }
 
   const current = $derived(app.contexts.find((c) => c.current)?.name ?? "");
 </script>
@@ -20,7 +27,7 @@
     class:invisible={app.contexts.length <= 1}
     aria-label="Cluster context"
     value={current}
-    onchange={(e) => switchContext(e.currentTarget.value)}
+    onchange={(e) => onContextChange(e.currentTarget.value)}
   >
     {#each app.contexts as ctx (ctx.name)}
       <option value={ctx.name}>{ctx.name}</option>

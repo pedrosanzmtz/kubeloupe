@@ -55,6 +55,18 @@ tauri-specta whenever a debug build starts, and by
 `cargo test -p kubeloupe-desktop export_typescript_bindings`. Commit the
 regenerated file when you change a command or event; CI fails if it is stale.
 
+### Table benchmark
+
+`desktop/ui-src/bench.html` is a dev-only page (not part of the build) that
+feeds the real Pods table a synthetic 10k-row watch: batched diffs every
+200 ms, a metrics merge every 20 s, auto-scroll and a filter box, and it shows
+fps, frame times and batch apply+render times. To measure in WebKitGTK (the
+slowest webview), start `npm --prefix desktop/ui-src run dev`, then either run
+`cd desktop && cargo tauri dev` and open the web inspector console to run
+`location.assign("/bench.html")`, or open `http://localhost:1420/bench.html` in
+any WebKitGTK browser (for example Epiphany). Click "Fill", "Start churn" and
+"Auto scroll".
+
 On Linux, Tauri needs the WebKitGTK system libraries first
 (`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `libayatana-appindicator3-dev`,
 `librsvg2-dev`). On macOS and Windows they are not needed.

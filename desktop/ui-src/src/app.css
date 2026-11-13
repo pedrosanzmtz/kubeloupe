@@ -103,3 +103,42 @@ th {
 .phase-CrashLoopBackOff {
   color: var(--red);
 }
+
+/* Small outlined button used in panel headers. */
+.btn {
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.btn:hover {
+  color: var(--text);
+}
+.btn.active,
+.btn.primary {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+}
+.section-header h3 {
+  margin: 0;
+  font-size: 13px;
+  flex: 1;
+}
+
+.detail-status {
+  margin: 0;
+  padding: 8px 16px;
+  font-size: 12px;
+  word-break: break-all;
+}
