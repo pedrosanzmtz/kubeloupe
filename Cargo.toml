@@ -1,0 +1,16 @@
+[package]
+name = "kubeloupe"
+version = "0.1.0"
+edition = "2021"
+description = "A Lens alternative written in Rust — a Kubernetes IDE"
+license = "MIT"
+repository = "https://github.com/pedrosanzmtz/kubeloupe"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+k8s-openapi = { version = "0.26", features = ["latest"] }
+kube = { version = "2", features = ["runtime"] }
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
