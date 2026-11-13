@@ -1,6 +1,8 @@
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
+const OVERVIEW_REFRESH_MS = 30_000;
+
 const state = {
   view: "overview",
   namespace: "",
@@ -49,7 +51,6 @@ const els = {
   contextSelect: document.getElementById("context-select"),
   namespaceSelect: document.getElementById("namespace-select"),
   searchInput: document.getElementById("search-input"),
-  autoRefresh: document.getElementById("auto-refresh"),
   error: document.getElementById("error"),
   toolbar: document.getElementById("toolbar"),
   tableWrap: document.getElementById("table-wrap"),
@@ -66,6 +67,16 @@ const els = {
   logOutput: document.getElementById("log-output"),
   logFollow: document.getElementById("log-follow"),
   logClear: document.getElementById("log-clear"),
+  logPause: document.getElementById("log-pause"),
+  logDownload: document.getElementById("log-download"),
+  logContainer: document.getElementById("log-container"),
+  logPrevious: document.getElementById("log-previous"),
+  logTail: document.getElementById("log-tail"),
+  logSince: document.getElementById("log-since"),
+  logTimestamps: document.getElementById("log-timestamps"),
+  logWrap: document.getElementById("log-wrap"),
+  logFilter: document.getElementById("log-filter"),
+  logStatus: document.getElementById("log-status"),
   terminal: document.getElementById("terminal"),
   termOpen: document.getElementById("term-open"),
   termClose: document.getElementById("term-close"),
@@ -138,12 +149,10 @@ async function loadNamespaces() {
   }
 }
 
-function filtered(rows) {
+function matchesSearch(row) {
   const q = state.search.trim().toLowerCase();
-  if (!q) return rows;
-  return rows.filter((row) =>
-    Object.values(row).some((v) => String(v).toLowerCase().includes(q))
-  );
+  if (!q) return true;
+  return Object.values(row).some((v) => String(v).toLowerCase().includes(q));
 }
 
 function formatCpu(millicores) {
@@ -184,38 +193,233 @@ function metricValue(row, key) {
   return "";
 }
 
-function render(rows) {
-  const cols = COLUMNS[state.view];
+// ---------------------------------------------------------------------------
+// Live table. The backend watches the cluster and pushes coalesced batches
+// ({snapshot, applied, deleted}); we keep a keyed map of rows plus one <tr>
+// per row and touch only what changed, so scroll and selection survive.
+// ---------------------------------------------------------------------------
+
+const live = {
+  watchId: null, // id of the active backend watch
+  token: 0, // bumped on every start/stop to invalidate in-flight starts
+  starting: false,
+  buffer: [], // events that arrived before cmd_watch_start resolved
+  rows: new Map(), // key -> row
+  els: new Map(), // key -> <tr>
+  order: [], // visible keys, sorted
+  dirty: true, // `order` needs recomputing
+  retryTimer: null,
+  metricsTimer: null,
+  ageTimer: null,
+};
+
+const METRICS_INTERVAL_MS = 20_000;
+const AGE_INTERVAL_MS = 15_000;
+const WATCH_RETRY_MS = 5_000;
+
+function rowKey(row) {
+  return state.view === "pods" ? `${row.namespace}/${row.name}` : row.name;
+}
+
+function formatAge(created, fallback) {
+  if (!created) return fallback || "";
+  const secs = Math.max(0, Math.floor(Date.now() / 1000 - created));
+  if (secs < 60) return secs + "s";
+  if (secs < 3600) return Math.floor(secs / 60) + "m";
+  if (secs < 86400) return Math.floor(secs / 3600) + "h";
+  return Math.floor(secs / 86400) + "d";
+}
+
+function cellText(row, key) {
+  if (key === "cpu" || key === "memory") return metricValue(row, key);
+  if (key === "age") return formatAge(row.created, row.age);
+  return String(row[key] ?? "");
+}
+
+function isSelectedRow(row) {
+  return (
+    state.view === "pods" &&
+    state.selectedPod &&
+    state.selectedPod.namespace === row.namespace &&
+    state.selectedPod.name === row.name
+  );
+}
+
+function createRowEl(row) {
+  const tr = document.createElement("tr");
+  for (const [key] of COLUMNS[state.view]) {
+    const td = document.createElement("td");
+    td.dataset.col = key;
+    tr.appendChild(td);
+  }
+  if (state.view === "pods") {
+    tr.dataset.namespace = row.namespace;
+    tr.dataset.name = row.name;
+  }
+  updateRowEl(tr, row);
+  return tr;
+}
+
+/** Write `row` into `tr`, touching only the cells whose text changed. */
+function updateRowEl(tr, row) {
+  for (const td of tr.children) {
+    const key = td.dataset.col;
+    const text = cellText(row, key);
+    if (td.textContent !== text) td.textContent = text;
+    if (key === "phase") {
+      const cls = `phase-${text}`;
+      if (td.className !== cls) td.className = cls;
+    }
+  }
+  if (state.view === "pods") {
+    tr.classList.add("clickable");
+    tr.classList.toggle("selected", !!isSelectedRow(row));
+  }
+}
+
+function renderHead() {
   els.head.innerHTML =
-    "<tr>" + cols.map(([, label]) => `<th>${label}</th>`).join("") + "</tr>";
+    "<tr>" + COLUMNS[state.view].map(([, label]) => `<th>${label}</th>`).join("") + "</tr>";
+}
 
-  const visible = filtered(rows);
-  els.body.innerHTML = visible
-    .map((row) => {
-      const cells = cols
-        .map(([key]) => {
-          const value =
-            key === "cpu" || key === "memory" ? metricValue(row, key) : row[key] ?? "";
-          const cls = key === "phase" ? ` class="phase-${value}"` : "";
-          return `<td${cls}>${escapeHtml(String(value))}</td>`;
-        })
-        .join("");
-      const isSelected =
-        state.view === "pods" &&
-        state.selectedPod &&
-        state.selectedPod.namespace === row.namespace &&
-        state.selectedPod.name === row.name;
-      const attrs =
-        state.view === "pods"
-          ? ` class="clickable${isSelected ? " selected" : ""}" data-namespace="${escapeHtml(row.namespace)}" data-name="${escapeHtml(row.name)}"`
-          : "";
-      return `<tr${attrs}>${cells}</tr>`;
-    })
-    .join("");
+function clearTable() {
+  live.rows.clear();
+  live.els.clear();
+  live.order = [];
+  live.dirty = true;
+  els.body.replaceChildren();
+  els.empty.classList.add("hidden");
+  els.count.textContent = "";
+  els.updated.textContent = "";
+}
 
-  els.empty.classList.toggle("hidden", visible.length > 0);
-  els.count.textContent = `${visible.length} of ${rows.length} items`;
+function removeRow(key) {
+  live.rows.delete(key);
+  const el = live.els.get(key);
+  if (el) el.remove();
+  live.els.delete(key);
+  live.dirty = true;
+}
+
+function setRow(row) {
+  const key = rowKey(row);
+  live.rows.set(key, row);
+  const el = live.els.get(key);
+  if (el) {
+    updateRowEl(el, row);
+  } else {
+    live.els.set(key, createRowEl(row));
+    live.dirty = true;
+  }
+}
+
+/** Bring the DOM in line with the map, moving or removing only what differs. */
+function reconcile() {
+  // A changed row can enter or leave the filter, so recompute while filtering.
+  if (live.dirty || state.search.trim()) {
+    live.order = [...live.rows.keys()]
+      .filter((k) => matchesSearch(live.rows.get(k)))
+      .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    live.dirty = false;
+  }
+  let ref = els.body.firstElementChild;
+  for (const key of live.order) {
+    const el = live.els.get(key);
+    if (el === ref) ref = ref.nextElementSibling;
+    else els.body.insertBefore(el, ref);
+  }
+  while (ref) {
+    const next = ref.nextElementSibling;
+    ref.remove();
+    ref = next;
+  }
+  els.empty.classList.toggle("hidden", live.order.length > 0);
+  els.count.textContent = `${live.order.length} of ${live.rows.size} items`;
   els.updated.textContent = "Updated " + new Date().toLocaleTimeString();
+}
+
+function applyBatch(batch) {
+  if (batch.snapshot) {
+    const keep = new Set(batch.applied.map(rowKey));
+    for (const key of [...live.rows.keys()]) if (!keep.has(key)) removeRow(key);
+  }
+  for (const row of batch.applied) setRow(row);
+  for (const key of batch.deleted) removeRow(key);
+  reconcile();
+}
+
+/** Re-render every row's derived cells (age, metrics, selection). */
+function refreshRows() {
+  for (const [key, el] of live.els) updateRowEl(el, live.rows.get(key));
+}
+
+function setWatchState(ws) {
+  if (ws.state === "live") {
+    setStatus(true, "Live");
+    showError("");
+  } else if (ws.state === "reconnecting") {
+    setStatus(false, "Reconnecting…");
+    showError("Watch interrupted, retrying: " + ws.error);
+  } else {
+    setStatus(null, "Connecting…");
+  }
+}
+
+function onWatchEvent(kind, payload) {
+  if (live.watchId === null) {
+    // The id is only known once cmd_watch_start resolves; replay then.
+    if (live.starting) live.buffer.push([kind, payload]);
+    return;
+  }
+  if (payload.id !== live.watchId) return; // a stopped watch
+  if (kind === "batch") applyBatch(payload);
+  else setWatchState(payload);
+}
+
+async function startWatch() {
+  stopWatch();
+  const token = ++live.token;
+  live.starting = true;
+  renderHead();
+  clearTable();
+  setWatchState({ state: "connecting" });
+  let id;
+  try {
+    id = await invoke("cmd_watch_start", {
+      kind: state.view,
+      namespace: state.view === "pods" ? state.namespace || null : null,
+    });
+  } catch (e) {
+    if (token !== live.token) return;
+    live.starting = false;
+    setStatus(false, "Cluster unreachable");
+    showError("Could not reach the cluster: " + e);
+    live.retryTimer = setTimeout(startWatch, WATCH_RETRY_MS);
+    return;
+  }
+  if (token !== live.token) {
+    invoke("cmd_watch_stop", { id }).catch(() => {});
+    return;
+  }
+  live.watchId = id;
+  live.starting = false;
+  for (const [kind, payload] of live.buffer.splice(0)) onWatchEvent(kind, payload);
+  loadMetrics();
+  live.metricsTimer = setInterval(loadMetrics, METRICS_INTERVAL_MS);
+  live.ageTimer = setInterval(refreshRows, AGE_INTERVAL_MS);
+}
+
+function stopWatch() {
+  live.token++;
+  live.starting = false;
+  live.buffer = [];
+  clearTimeout(live.retryTimer);
+  clearInterval(live.metricsTimer);
+  clearInterval(live.ageTimer);
+  live.retryTimer = live.metricsTimer = live.ageTimer = null;
+  const id = live.watchId;
+  live.watchId = null;
+  if (id) invoke("cmd_watch_stop", { id }).catch(() => {});
 }
 
 function renderOverview(ov) {
@@ -257,39 +461,21 @@ function renderOverview(ov) {
   els.updated.textContent = "Updated " + new Date().toLocaleTimeString();
 }
 
+/** Metrics can't be watched: poll them and merge into the live rows. */
 async function loadMetrics() {
+  const token = live.token;
   try {
     const snap = await invoke("cmd_get_metrics");
+    if (token !== live.token) return;
     state.metrics = { pods: {}, nodes: {} };
     for (const p of snap.pods) state.metrics.pods[`${p.namespace}/${p.name}`] = p;
     for (const n of snap.nodes) state.metrics.nodes[n.name] = n;
   } catch (e) {
     // Metrics are best effort; the tables show "—" without them.
+    if (token !== live.token) return;
     state.metrics = { pods: {}, nodes: {} };
   }
-}
-
-async function loadView() {
-  showError("");
-  try {
-    let rows;
-    if (state.view === "pods") {
-      rows = await invoke("cmd_list_pods", {
-        namespace: state.namespace || null,
-      });
-    } else if (state.view === "namespaces") {
-      rows = await invoke("cmd_list_namespaces");
-    } else {
-      rows = await invoke("cmd_list_nodes");
-    }
-    setStatus(true, "Connected");
-    await loadMetrics();
-    render(rows);
-  } catch (e) {
-    setStatus(false, "Cluster unreachable");
-    showError("Could not reach the cluster: " + e);
-    render([]);
-  }
+  refreshRows();
 }
 
 async function loadOverview() {
@@ -305,14 +491,12 @@ async function loadOverview() {
   }
 }
 
-function scheduleAutoRefresh() {
+/** The overview is not watched; it re-requests itself while it is open. */
+function scheduleOverviewRefresh() {
   if (state.timer) clearInterval(state.timer);
   state.timer = null;
-  if (els.autoRefresh.checked) {
-    state.timer = setInterval(() => {
-      if (state.view === "overview") loadOverview();
-      else loadView();
-    }, 30_000);
+  if (state.view === "overview") {
+    state.timer = setInterval(loadOverview, OVERVIEW_REFRESH_MS);
   }
 }
 
@@ -327,27 +511,207 @@ function setView(view) {
   els.tableWrap.classList.toggle("hidden", isOverview);
   els.overview.classList.toggle("hidden", !isOverview);
   els.namespaceSelect.style.visibility = view === "pods" ? "visible" : "hidden";
-  if (isOverview) loadOverview();
-  else loadView();
+  scheduleOverviewRefresh();
+  showError("");
+  if (isOverview) {
+    stopWatch();
+    loadOverview();
+  } else {
+    startWatch();
+  }
 }
 
+function refreshCurrentView() {
+  if (state.view === "overview") loadOverview();
+  else startWatch();
+}
+
+// ---- Logs -----------------------------------------------------------------
+// Lines live in a bounded buffer (LOG_BUFFER_MAX, trimmed in chunks so it is
+// amortised O(1) per line). The DOM only ever shows the newest LOG_DOM_MAX
+// matching lines, and incoming batches are appended once per animation frame
+// instead of re-rendering the buffer.
+const LOG_BUFFER_MAX = 50000;
+const LOG_DOM_MAX = 5000;
+
+const logs = {
+  streamId: 0,
+  buf: [],
+  pending: [],
+  paused: false,
+  filter: "",
+  raf: 0,
+  filterTimer: 0,
+};
+
+function logLineNode(text) {
+  const div = document.createElement("div");
+  const f = logs.filter;
+  if (!f) {
+    div.textContent = text;
+    return div;
+  }
+  const lower = text.toLowerCase();
+  const needle = f.toLowerCase();
+  let pos = 0;
+  for (;;) {
+    const i = lower.indexOf(needle, pos);
+    if (i < 0) break;
+    if (i > pos) div.appendChild(document.createTextNode(text.slice(pos, i)));
+    const mark = document.createElement("mark");
+    mark.textContent = text.slice(i, i + needle.length);
+    div.appendChild(mark);
+    pos = i + needle.length;
+  }
+  if (pos < text.length) div.appendChild(document.createTextNode(text.slice(pos)));
+  return div;
+}
+
+function logMatches(text) {
+  return !logs.filter || text.toLowerCase().includes(logs.filter.toLowerCase());
+}
+
+function updateLogStatus() {
+  const n = logs.buf.length;
+  els.logStatus.textContent =
+    (logs.paused ? "paused · " : "") + n.toLocaleString() + (n >= LOG_BUFFER_MAX ? "+" : "") + " lines";
+}
+
+function isAtBottom() {
+  return els.logOutput.scrollHeight - els.logOutput.scrollTop - els.logOutput.clientHeight < 40;
+}
+
+// Append system messages (errors, "stream ended"); these are not part of the buffer.
 function appendLog(text, cls) {
-  const atBottom =
-    els.logOutput.scrollHeight - els.logOutput.scrollTop - els.logOutput.clientHeight < 40;
+  const atBottom = isAtBottom();
   const div = document.createElement("div");
   if (cls) div.className = cls;
   div.textContent = text;
   els.logOutput.appendChild(div);
-  if (state.logFollow && atBottom) {
-    els.logOutput.scrollTop = els.logOutput.scrollHeight;
+  if (state.logFollow && atBottom) els.logOutput.scrollTop = els.logOutput.scrollHeight;
+}
+
+function flushLogs() {
+  logs.raf = 0;
+  if (logs.paused || logs.pending.length === 0) return;
+  const lines = logs.pending;
+  logs.pending = [];
+  const atBottom = isAtBottom();
+  const frag = document.createDocumentFragment();
+  for (const line of lines) {
+    if (logMatches(line)) frag.appendChild(logLineNode(line));
+  }
+  els.logOutput.appendChild(frag);
+  let extra = els.logOutput.childElementCount - LOG_DOM_MAX;
+  while (extra-- > 0) els.logOutput.removeChild(els.logOutput.firstChild);
+  if (state.logFollow && atBottom) els.logOutput.scrollTop = els.logOutput.scrollHeight;
+  updateLogStatus();
+}
+
+function onLogBatch(lines) {
+  const buf = logs.buf;
+  for (const l of lines) buf.push(l);
+  if (buf.length > LOG_BUFFER_MAX + LOG_BUFFER_MAX / 10) {
+    buf.splice(0, buf.length - LOG_BUFFER_MAX);
+  }
+  if (logs.paused) {
+    updateLogStatus();
+    return;
+  }
+  for (const l of lines) logs.pending.push(l);
+  if (!logs.raf) logs.raf = requestAnimationFrame(flushLogs);
+}
+
+// Rebuild the DOM from the buffer (filter change, resume).
+function renderLogs() {
+  logs.pending = [];
+  els.logOutput.textContent = "";
+  const frag = document.createDocumentFragment();
+  const picked = [];
+  for (let i = logs.buf.length - 1; i >= 0 && picked.length < LOG_DOM_MAX; i--) {
+    if (logMatches(logs.buf[i])) picked.push(logs.buf[i]);
+  }
+  for (let i = picked.length - 1; i >= 0; i--) frag.appendChild(logLineNode(picked[i]));
+  els.logOutput.appendChild(frag);
+  if (state.logFollow) els.logOutput.scrollTop = els.logOutput.scrollHeight;
+  updateLogStatus();
+}
+
+function resetLogs() {
+  logs.buf = [];
+  logs.pending = [];
+  els.logOutput.textContent = "";
+  updateLogStatus();
+}
+
+function setLogPaused(paused) {
+  logs.paused = paused;
+  els.logPause.textContent = paused ? "Resume" : "Pause";
+  els.logPause.classList.toggle("active", paused);
+  if (!paused) renderLogs();
+  else updateLogStatus();
+}
+
+function populateLogContainers(list) {
+  els.logContainer.innerHTML = "";
+  for (const c of list) {
+    const opt = document.createElement("option");
+    opt.value = c.name;
+    opt.textContent = c.init ? `${c.name} (init)` : c.name;
+    els.logContainer.appendChild(opt);
+  }
+  const firstMain = list.find((c) => !c.init);
+  if (firstMain) els.logContainer.value = firstMain.name;
+}
+
+async function startLogs() {
+  const pod = state.selectedPod;
+  if (!pod) return;
+  resetLogs();
+  setLogPaused(false);
+  const since = els.logSince.value;
+  const tail = els.logTail.value;
+  logs.streamId += 1;
+  try {
+    await invoke("cmd_stream_pod_logs", {
+      namespace: pod.namespace,
+      name: pod.name,
+      container: els.logContainer.value || null,
+      previous: els.logPrevious.checked,
+      tailLines: tail === "all" ? null : Number(tail),
+      sinceSeconds: since === "all" ? null : Number(since),
+      timestamps: els.logTimestamps.checked,
+      streamId: logs.streamId,
+    });
+  } catch (e) {
+    appendLog("Could not start log stream: " + e, "error-text");
+  }
+}
+
+async function downloadLogs() {
+  const pod = state.selectedPod;
+  if (!pod) return;
+  const container = els.logContainer.value || "pod";
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const filename = `${pod.name}_${container}${els.logPrevious.checked ? "_previous" : ""}_${stamp}.log`;
+  try {
+    // Written by the backend: Blob/anchor downloads are not reliable in
+    // Tauri's webviews, and a save dialog would need an extra plugin.
+    const path = await invoke("cmd_save_logs", { filename, content: logs.buf.join("\n") + "\n" });
+    els.logStatus.textContent = "saved to " + path;
+  } catch (e) {
+    appendLog("Could not save logs: " + e, "error-text");
   }
 }
 
 async function openDetail(namespace, name) {
   state.selectedPod = { namespace, name };
+  refreshRows();
   els.detailTitle.textContent = `${namespace}/${name}`;
   els.detailBody.innerHTML = "<p class='muted'>Loading…</p>";
-  els.logOutput.innerHTML = "";
+  resetLogs();
+  els.logPrevious.checked = false;
+  els.logContainer.innerHTML = "";
   closeTerminal();
   stopPortForward();
   els.yamlEditor.value = "";
@@ -356,6 +720,7 @@ async function openDetail(namespace, name) {
   try {
     const d = await invoke("cmd_get_pod_details", { namespace, name });
     state.detailContainers = d.containers || [];
+    populateLogContainers(d.log_containers || []);
     const labels = Object.entries(d.labels || {})
       .map(([k, v]) => `<span class="label-chip">${escapeHtml(k)}=${escapeHtml(v)}</span>`)
       .join(" ");
@@ -386,19 +751,17 @@ async function openDetail(namespace, name) {
     els.detailBody.innerHTML = `<p class="error-text">Could not load pod details: ${escapeHtml(String(e))}</p>`;
   }
   loadYaml();
-  try {
-    await invoke("cmd_stream_pod_logs", { namespace, name });
-  } catch (e) {
-    appendLog("Could not start log stream: " + e, "error-text");
-  }
+  await startLogs();
 }
 
 async function closeDetail() {
   if (!state.selectedPod) return;
   state.selectedPod = null;
+  refreshRows();
   state.detailContainers = [];
   els.detail.classList.add("hidden");
-  els.logOutput.innerHTML = "";
+  logs.streamId += 1;
+  resetLogs();
   closeTerminal();
   stopPortForward();
   try {
@@ -530,12 +893,10 @@ async function saveYaml() {
 document.querySelectorAll(".nav-btn").forEach((btn) => {
   btn.addEventListener("click", () => setView(btn.dataset.view));
 });
-els.refreshBtn.addEventListener("click", () => {
-  if (state.view === "overview") loadOverview();
-  else loadView();
-});
+els.refreshBtn.addEventListener("click", refreshCurrentView);
 els.contextSelect.addEventListener("change", async (e) => {
   const name = e.target.value || null;
+  stopWatch();
   try {
     await invoke("cmd_set_context", { name });
   } catch (err) {
@@ -544,19 +905,18 @@ els.contextSelect.addEventListener("change", async (e) => {
   }
   closeDetail();
   await loadNamespaces();
-  if (state.view === "overview") loadOverview();
-  else loadView();
+  refreshCurrentView();
 });
 els.namespaceSelect.addEventListener("change", (e) => {
   state.namespace = e.target.value;
   closeDetail();
-  loadView();
+  startWatch();
 });
 els.searchInput.addEventListener("input", (e) => {
   state.search = e.target.value;
-  loadView();
+  live.dirty = true;
+  reconcile();
 });
-els.autoRefresh.addEventListener("change", scheduleAutoRefresh);
 els.body.addEventListener("click", (e) => {
   const row = e.target.closest("tr.clickable");
   if (!row) return;
@@ -582,14 +942,30 @@ window.addEventListener("resize", () => {
 els.logFollow.addEventListener("change", (e) => {
   state.logFollow = e.target.checked;
 });
-els.logClear.addEventListener("click", () => {
-  els.logOutput.innerHTML = "";
+els.logClear.addEventListener("click", resetLogs);
+els.logPause.addEventListener("click", () => setLogPaused(!logs.paused));
+els.logDownload.addEventListener("click", downloadLogs);
+for (const el of [els.logContainer, els.logPrevious, els.logTail, els.logSince, els.logTimestamps]) {
+  el.addEventListener("change", startLogs);
+}
+els.logWrap.addEventListener("change", (e) => {
+  els.logOutput.classList.toggle("wrap", e.target.checked);
+});
+els.logFilter.addEventListener("input", (e) => {
+  clearTimeout(logs.filterTimer);
+  logs.filterTimer = setTimeout(() => {
+    logs.filter = e.target.value;
+    renderLogs();
+  }, 150);
 });
 
 (async () => {
-  await listen("pod-log", (event) => appendLog(event.payload));
-  await listen("pod-log-done", () => appendLog("[stream ended]", "muted"));
-  await listen("pod-log-error", (event) => appendLog(event.payload, "error-text"));
+  // Events carry the id of the stream that produced them; ignore stragglers
+  // from a stream that has since been replaced.
+  const current = (event) => event.payload.streamId === logs.streamId;
+  await listen("pod-log", (event) => current(event) && onLogBatch(event.payload.data));
+  await listen("pod-log-done", (event) => current(event) && appendLog("[stream ended]", "muted"));
+  await listen("pod-log-error", (event) => current(event) && appendLog(event.payload.data, "error-text"));
   // Output can arrive before cmd_exec_start resolves and state.execSession
   // is set, so while a terminal is open without a session yet, accept
   // output for it as well.
@@ -607,8 +983,9 @@ els.logClear.addEventListener("click", () => {
       // session it no longer knows.
     }
   });
+  await listen("watch-batch", (event) => onWatchEvent("batch", event.payload));
+  await listen("watch-state", (event) => onWatchEvent("state", event.payload));
   await loadContexts();
   await loadNamespaces();
-  scheduleAutoRefresh();
   setView("overview");
 })();

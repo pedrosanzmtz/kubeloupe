@@ -4,15 +4,16 @@ use futures::SinkExt;
 use kube::api::TerminalSize;
 use kube::Client;
 use kubeloupe::{
-    apply_pod_yaml, client_for_context, exec_pod, get_namespaces, get_node_metrics, get_nodes,
-    get_overview, get_pod_details, get_pod_metrics, get_pod_yaml, get_pods, list_contexts,
-    serve_port_forward, stream_pod_logs, ContextInfo, NamespaceInfo, NodeInfo, NodeUsage, Overview,
-    PodDetail, PodInfo, PodUsage,
+    apply_pod_yaml, batch_lines, client_for_context, exec_pod, get_namespaces, get_node_metrics,
+    get_nodes, get_overview, get_pod_details, get_pod_metrics, get_pod_yaml, get_pods,
+    list_contexts, serve_port_forward, stream_pod_logs, watch, ContextInfo, LogOptions,
+    NamespaceInfo, NodeInfo, NodeUsage, Overview, PodDetail, PodInfo, PodUsage,
 };
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, State};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -52,6 +53,8 @@ struct AppState {
     exec_sessions: Mutex<HashMap<String, ExecSession>>,
     /// Active port-forwards, by session id.
     forwards: Mutex<HashMap<String, ForwardSession>>,
+    /// Running resource watchers, by watch id.
+    watches: Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>,
 }
 
 fn selected_context(state: &State<'_, AppState>) -> Option<String> {
@@ -82,6 +85,13 @@ fn stop_all_exec(state: &State<'_, AppState>) {
     let mut sessions = state.exec_sessions.lock().unwrap();
     for (_, session) in sessions.drain() {
         session.task.abort();
+    }
+}
+
+fn stop_all_watches(state: &State<'_, AppState>) {
+    let mut watches = state.watches.lock().unwrap();
+    for (_, task) in watches.drain() {
+        task.abort();
     }
 }
 
@@ -127,28 +137,115 @@ async fn cmd_get_pod_details(
         .map_err(|e| e.to_string())
 }
 
+/// Log events carry the id of the stream that produced them, so the UI can
+/// drop stragglers from a stream it has already replaced.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LogEvent<T> {
+    stream_id: u64,
+    data: T,
+}
+
+/// Flush a log batch after this many lines or this long, whichever is first.
+const LOG_BATCH_LINES: usize = 500;
+const LOG_BATCH_INTERVAL: Duration = Duration::from_millis(50);
+
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn cmd_stream_pod_logs(
     app: AppHandle,
     state: State<'_, AppState>,
     namespace: String,
     name: String,
+    container: Option<String>,
+    previous: Option<bool>,
+    tail_lines: Option<i64>,
+    since_seconds: Option<i64>,
+    timestamps: Option<bool>,
+    stream_id: u64,
 ) -> Result<(), String> {
     stop_log_stream(&state);
     let client = client(&state).await?;
+    let opts = LogOptions {
+        container,
+        previous: previous.unwrap_or(false),
+        tail_lines,
+        since_seconds,
+        timestamps: timestamps.unwrap_or(false),
+    };
     let handle = tauri::async_runtime::spawn(async move {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
         let emitter = app.clone();
-        let result = stream_pod_logs(&client, &namespace, &name, None, move |line| {
-            let _ = emitter.emit("pod-log", line);
+        let batcher = tauri::async_runtime::spawn(batch_lines(
+            rx,
+            LOG_BATCH_LINES,
+            LOG_BATCH_INTERVAL,
+            move |batch| {
+                let _ = emitter.emit(
+                    "pod-log",
+                    LogEvent {
+                        stream_id,
+                        data: batch,
+                    },
+                );
+            },
+        ));
+        let result = stream_pod_logs(&client, &namespace, &name, &opts, move |line| {
+            let _ = tx.send(line);
         })
         .await;
-        if result.is_err() {
-            let _ = app.emit("pod-log-error", "Log stream ended with an error");
+        // The sender was dropped with the closure, so the batcher flushes and exits.
+        let _ = batcher.await;
+        if let Err(e) = result {
+            let msg = format!("Log stream ended with an error: {e}");
+            let _ = app.emit(
+                "pod-log-error",
+                LogEvent {
+                    stream_id,
+                    data: msg,
+                },
+            );
         }
-        let _ = app.emit("pod-log-done", ());
+        let _ = app.emit(
+            "pod-log-done",
+            LogEvent {
+                stream_id,
+                data: (),
+            },
+        );
     });
     *state.log_task.lock().unwrap() = Some(handle);
     Ok(())
+}
+
+/// Save log text to the user's Downloads folder and return the path. A
+/// webview Blob download is not reliable across the platforms Tauri targets
+/// and there is no file dialog without an extra plugin, so we write directly.
+#[tauri::command]
+async fn cmd_save_logs(filename: String, content: String) -> Result<String, String> {
+    let safe: String = filename
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let safe = if safe.is_empty() || safe.starts_with('.') {
+        format!("log{safe}")
+    } else {
+        safe
+    };
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .ok_or("cannot locate home directory")?;
+    let dir = std::path::PathBuf::from(home).join("Downloads");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(safe);
+    std::fs::write(&path, content).map_err(|e| e.to_string())?;
+    Ok(path.display().to_string())
 }
 
 #[tauri::command]
@@ -184,6 +281,92 @@ async fn cmd_get_metrics(state: State<'_, AppState>) -> Result<MetricsSnapshot, 
     })
 }
 
+/// Payload of the `watch-batch` event.
+#[derive(Debug, Clone, Serialize)]
+struct WatchBatchEvent<T> {
+    id: String,
+    #[serde(flatten)]
+    batch: watch::Batch<T>,
+}
+
+/// Payload of the `watch-state` event.
+#[derive(Debug, Clone, Serialize)]
+struct WatchStateEvent {
+    id: String,
+    #[serde(flatten)]
+    state: watch::WatchState,
+}
+
+/// Forward a watch to the webview: state changes as `watch-state`, rows as
+/// coalesced `watch-batch` events.
+async fn pump_watch<T, S>(app: AppHandle, id: String, updates: S)
+where
+    T: watch::Keyed + Clone + Serialize + Send + 'static,
+    S: futures::Stream<Item = watch::Update<T>> + Unpin,
+{
+    watch::run_batched(updates, watch::DEFAULT_FLUSH, |out| match out {
+        watch::Output::Batch(batch) => {
+            let _ = app.emit(
+                "watch-batch",
+                WatchBatchEvent {
+                    id: id.clone(),
+                    batch,
+                },
+            );
+        }
+        watch::Output::State(state) => {
+            let _ = app.emit(
+                "watch-state",
+                WatchStateEvent {
+                    id: id.clone(),
+                    state,
+                },
+            );
+        }
+    })
+    .await;
+}
+
+/// Start watching `kind` ("pods", "nodes" or "namespaces"). Returns the
+/// watch id carried by the `watch-batch` / `watch-state` events. The first
+/// batch is a full snapshot; later ones are incremental.
+#[tauri::command]
+async fn cmd_watch_start(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    kind: String,
+    namespace: Option<String>,
+) -> Result<String, String> {
+    let client = client(&state).await?;
+    let id = next_session("watch");
+    let task_id = id.clone();
+    let task = match kind.as_str() {
+        "pods" => {
+            let (_store, updates) = watch::watch_pods(&client, namespace.as_deref());
+            tauri::async_runtime::spawn(pump_watch(app, task_id, updates))
+        }
+        "nodes" => {
+            let (_store, updates) = watch::watch_nodes(&client);
+            tauri::async_runtime::spawn(pump_watch(app, task_id, updates))
+        }
+        "namespaces" => {
+            let (_store, updates) = watch::watch_namespaces(&client);
+            tauri::async_runtime::spawn(pump_watch(app, task_id, updates))
+        }
+        other => return Err(format!("cannot watch {other}")),
+    };
+    state.watches.lock().unwrap().insert(id.clone(), task);
+    Ok(id)
+}
+
+#[tauri::command]
+async fn cmd_watch_stop(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    if let Some(task) = state.watches.lock().unwrap().remove(&id) {
+        task.abort();
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn cmd_list_contexts(state: State<'_, AppState>) -> Result<Vec<ContextInfo>, String> {
     let mut contexts = list_contexts().await.map_err(|e| e.to_string())?;
@@ -200,6 +383,7 @@ async fn cmd_set_context(state: State<'_, AppState>, name: Option<String>) -> Re
     stop_log_stream(&state);
     stop_all_exec(&state);
     stop_all_forwards(&state);
+    stop_all_watches(&state);
     *state.context.lock().unwrap() = name;
     *state.client.lock().await = None;
     Ok(())
@@ -465,6 +649,7 @@ fn main() {
             log_task: Mutex::new(None),
             exec_sessions: Mutex::new(HashMap::new()),
             forwards: Mutex::new(HashMap::new()),
+            watches: Mutex::new(HashMap::new()),
         })
         .invoke_handler(tauri::generate_handler![
             cmd_list_pods,
@@ -473,8 +658,11 @@ fn main() {
             cmd_get_pod_details,
             cmd_stream_pod_logs,
             cmd_stop_pod_logs,
+            cmd_save_logs,
             cmd_get_overview,
             cmd_get_metrics,
+            cmd_watch_start,
+            cmd_watch_stop,
             cmd_list_contexts,
             cmd_set_context,
             cmd_exec_start,
