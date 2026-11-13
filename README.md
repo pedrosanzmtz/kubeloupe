@@ -45,7 +45,37 @@ cargo run -- pods
 cargo run -- pods -n kube-system
 cargo run -- namespaces
 cargo run -- nodes
+cargo run -- logs <pod> -n <namespace>
 ```
+
+## Test cluster
+
+`bash scripts/test-cluster/setup.sh` creates two local test clusters with
+[kwok](https://kwok.sigs.k8s.io/) (Kubernetes WithOut Kubelet): real API
+servers (kube-apiserver + etcd, Kubernetes v1.36) with simulated nodes and
+pods. No Docker, no VM, no cgroup support needed — that is why kwok, and not
+kind/k3s/minikube, is the test route here.
+
+It creates:
+
+- `kubeloupe-test` — 2 nodes and the demo workload
+  (`scripts/test-cluster/demo.yaml`): nginx and logger deployments, a
+  Pending pod (`hungry`, impossible resource request) and a Failed pod
+  (`crashed`)
+- `kubeloupe-staging` — 1 node, empty, so the context switcher has a second
+  cluster to switch to
+
+It merges both contexts into `~/.kube/config` and leaves `kubeloupe-test`
+current, so `cargo run -p kubeloupe-desktop` opens against the test cluster.
+
+One honest limitation: kwok simulates pods, there is no kubelet, so **pod
+logs are not available** — the log pane shows an error. Log streaming needs
+a cluster with real containers (kind, k3s, or a real cluster). Everything
+else — lists, details, events, overview, context switching — works against
+the real API server.
+
+Stop the clusters with `kwokctl delete cluster --name kubeloupe-test` (and
+`kubeloupe-staging`); re-run the script to recreate them.
 
 ## Roadmap
 
