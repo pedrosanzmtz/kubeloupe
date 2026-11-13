@@ -11,6 +11,8 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use tokio::io::AsyncReadExt;
 
+pub mod watch;
+
 /// Build a client for the given context (`None` = the kubeconfig's
 /// current-context), or from in-cluster config.
 pub async fn client_for_context(context: Option<&str>) -> Result<Client> {
@@ -89,8 +91,10 @@ fn format_age(t: DateTime<Utc>) -> String {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PodInfo {
+    /// Creation time (unix seconds) so a UI can keep `age` fresh itself.
+    pub created: i64,
     pub name: String,
     pub namespace: String,
     pub phase: String,
@@ -98,15 +102,19 @@ pub struct PodInfo {
     pub age: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct NamespaceInfo {
+    /// Creation time (unix seconds) so a UI can keep `age` fresh itself.
+    pub created: i64,
     pub name: String,
     pub status: String,
     pub age: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct NodeInfo {
+    /// Creation time (unix seconds) so a UI can keep `age` fresh itself.
+    pub created: i64,
     pub name: String,
     pub ready: String,
     pub version: String,
@@ -177,6 +185,71 @@ pub async fn list_contexts() -> Result<Vec<ContextInfo>> {
         .collect())
 }
 
+fn created_secs(ts: &Option<Time>) -> i64 {
+    ts.as_ref().map(|t| t.0.timestamp()).unwrap_or_default()
+}
+
+/// Summarize a pod for the list view.
+pub fn pod_info(pod: &Pod) -> PodInfo {
+    let meta = &pod.metadata;
+    PodInfo {
+        created: created_secs(&meta.creation_timestamp),
+        name: meta.name.clone().unwrap_or_default(),
+        namespace: meta.namespace.clone().unwrap_or_default(),
+        phase: pod
+            .status
+            .as_ref()
+            .and_then(|s| s.phase.clone())
+            .unwrap_or_default(),
+        node: pod
+            .spec
+            .as_ref()
+            .and_then(|s| s.node_name.clone())
+            .unwrap_or_default(),
+        age: age_of(meta.creation_timestamp.clone()),
+    }
+}
+
+/// Summarize a namespace for the list view.
+pub fn namespace_info(ns: &Namespace) -> NamespaceInfo {
+    let meta = &ns.metadata;
+    NamespaceInfo {
+        created: created_secs(&meta.creation_timestamp),
+        name: meta.name.clone().unwrap_or_default(),
+        status: ns
+            .status
+            .as_ref()
+            .and_then(|s| s.phase.clone())
+            .unwrap_or_default(),
+        age: age_of(meta.creation_timestamp.clone()),
+    }
+}
+
+/// Summarize a node for the list view.
+pub fn node_info(node: &Node) -> NodeInfo {
+    let meta = &node.metadata;
+    let ready = node
+        .status
+        .as_ref()
+        .and_then(|s| s.conditions.as_ref())
+        .and_then(|conds| conds.iter().find(|c| c.type_ == "Ready"))
+        .map(|c| c.status.clone())
+        .unwrap_or_default();
+    let version = node
+        .status
+        .as_ref()
+        .and_then(|s| s.node_info.as_ref())
+        .map(|info| info.kubelet_version.clone())
+        .unwrap_or_default();
+    NodeInfo {
+        created: created_secs(&meta.creation_timestamp),
+        name: meta.name.clone().unwrap_or_default(),
+        ready,
+        version,
+        age: age_of(meta.creation_timestamp.clone()),
+    }
+}
+
 /// Fetch pods, optionally scoped to one namespace.
 pub async fn get_pods(client: &Client, namespace: Option<&str>) -> Result<Vec<PodInfo>> {
     let pods: Api<Pod> = match namespace {
@@ -184,82 +257,21 @@ pub async fn get_pods(client: &Client, namespace: Option<&str>) -> Result<Vec<Po
         None => Api::all(client.clone()),
     };
     let list = pods.list(&ListParams::default()).await?;
-    Ok(list
-        .items
-        .into_iter()
-        .map(|pod| {
-            let meta = pod.metadata;
-            PodInfo {
-                name: meta.name.unwrap_or_default(),
-                namespace: meta.namespace.unwrap_or_default(),
-                phase: pod
-                    .status
-                    .as_ref()
-                    .and_then(|s| s.phase.clone())
-                    .unwrap_or_default(),
-                node: pod
-                    .spec
-                    .as_ref()
-                    .and_then(|s| s.node_name.clone())
-                    .unwrap_or_default(),
-                age: age_of(meta.creation_timestamp),
-            }
-        })
-        .collect())
+    Ok(list.items.iter().map(pod_info).collect())
 }
 
 /// Fetch all namespaces in the cluster.
 pub async fn get_namespaces(client: &Client) -> Result<Vec<NamespaceInfo>> {
     let namespaces: Api<Namespace> = Api::all(client.clone());
     let list = namespaces.list(&ListParams::default()).await?;
-    Ok(list
-        .items
-        .into_iter()
-        .map(|ns| {
-            let meta = ns.metadata;
-            NamespaceInfo {
-                name: meta.name.unwrap_or_default(),
-                status: ns
-                    .status
-                    .as_ref()
-                    .and_then(|s| s.phase.clone())
-                    .unwrap_or_default(),
-                age: age_of(meta.creation_timestamp),
-            }
-        })
-        .collect())
+    Ok(list.items.iter().map(namespace_info).collect())
 }
 
 /// Fetch all nodes in the cluster.
 pub async fn get_nodes(client: &Client) -> Result<Vec<NodeInfo>> {
     let nodes: Api<Node> = Api::all(client.clone());
     let list = nodes.list(&ListParams::default()).await?;
-    Ok(list
-        .items
-        .into_iter()
-        .map(|node| {
-            let meta = node.metadata;
-            let ready = node
-                .status
-                .as_ref()
-                .and_then(|s| s.conditions.as_ref())
-                .and_then(|conds| conds.iter().find(|c| c.type_ == "Ready"))
-                .map(|c| c.status.clone())
-                .unwrap_or_default();
-            let version = node
-                .status
-                .as_ref()
-                .and_then(|s| s.node_info.as_ref())
-                .map(|info| info.kubelet_version.clone())
-                .unwrap_or_default();
-            NodeInfo {
-                name: meta.name.unwrap_or_default(),
-                ready,
-                version,
-                age: age_of(meta.creation_timestamp),
-            }
-        })
-        .collect())
+    Ok(list.items.iter().map(node_info).collect())
 }
 
 /// Fetch one pod's details: identity, labels and per-container state.
@@ -1006,4 +1018,35 @@ mod tests {
         assert_eq!(format_memory(1024 * 1024 * 1024), "1Gi");
         assert_eq!(format_memory(512), "512B");
     }
+}
+
+/// Print live changes to pods, nodes or namespaces until interrupted.
+pub async fn watch_and_print(client: &Client, resource: &str, namespace: Option<&str>) -> Result<()> {
+    use watch::{run_batched, Output, DEFAULT_FLUSH};
+    fn print<T: std::fmt::Debug>(out: Output<T>) {
+        match out {
+            Output::State(s) => println!("state: {s:?}"),
+            Output::Batch(b) => {
+                println!(
+                    "{}: {} applied, {} deleted",
+                    if b.snapshot { "snapshot" } else { "batch" },
+                    b.applied.len(),
+                    b.deleted.len()
+                );
+                for item in &b.applied {
+                    println!("  + {item:?}");
+                }
+                for key in &b.deleted {
+                    println!("  - {key}");
+                }
+            }
+        }
+    }
+    match resource {
+        "pods" => run_batched(watch::watch_pods(client, namespace).1, DEFAULT_FLUSH, print).await,
+        "nodes" => run_batched(watch::watch_nodes(client).1, DEFAULT_FLUSH, print).await,
+        "namespaces" => run_batched(watch::watch_namespaces(client).1, DEFAULT_FLUSH, print).await,
+        other => anyhow::bail!("unknown resource for watch: {other} (use pods, nodes or namespaces)"),
+    }
+    Ok(())
 }
