@@ -7,13 +7,14 @@ use kubeloupe::{
     client_for_context,
     apply_pod_yaml, exec_pod, get_namespaces, get_node_metrics, get_nodes, get_overview,
     get_pod_details, get_pod_metrics, get_pod_yaml, get_pods, list_contexts, serve_port_forward,
-    stream_pod_logs, ContextInfo, NamespaceInfo, NodeInfo, NodeUsage, Overview, PodDetail, PodInfo,
+    batch_lines, stream_pod_logs, ContextInfo, LogOptions, NamespaceInfo, NodeInfo, NodeUsage, Overview, PodDetail, PodInfo,
     PodUsage,
 };
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, State};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -126,28 +127,87 @@ async fn cmd_get_pod_details(
         .map_err(|e| e.to_string())
 }
 
+/// Log events carry the id of the stream that produced them, so the UI can
+/// drop stragglers from a stream it has already replaced.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LogEvent<T> {
+    stream_id: u64,
+    data: T,
+}
+
+/// Flush a log batch after this many lines or this long, whichever is first.
+const LOG_BATCH_LINES: usize = 500;
+const LOG_BATCH_INTERVAL: Duration = Duration::from_millis(50);
+
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn cmd_stream_pod_logs(
     app: AppHandle,
     state: State<'_, AppState>,
     namespace: String,
     name: String,
+    container: Option<String>,
+    previous: Option<bool>,
+    tail_lines: Option<i64>,
+    since_seconds: Option<i64>,
+    timestamps: Option<bool>,
+    stream_id: u64,
 ) -> Result<(), String> {
     stop_log_stream(&state);
     let client = client(&state).await?;
+    let opts = LogOptions {
+        container,
+        previous: previous.unwrap_or(false),
+        tail_lines,
+        since_seconds,
+        timestamps: timestamps.unwrap_or(false),
+    };
     let handle = tauri::async_runtime::spawn(async move {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
         let emitter = app.clone();
-        let result = stream_pod_logs(&client, &namespace, &name, None, move |line| {
-            let _ = emitter.emit("pod-log", line);
+        let batcher = tauri::async_runtime::spawn(batch_lines(
+            rx,
+            LOG_BATCH_LINES,
+            LOG_BATCH_INTERVAL,
+            move |batch| {
+                let _ = emitter.emit("pod-log", LogEvent { stream_id, data: batch });
+            },
+        ));
+        let result = stream_pod_logs(&client, &namespace, &name, &opts, move |line| {
+            let _ = tx.send(line);
         })
         .await;
-        if result.is_err() {
-            let _ = app.emit("pod-log-error", "Log stream ended with an error");
+        // The sender was dropped with the closure, so the batcher flushes and exits.
+        let _ = batcher.await;
+        if let Err(e) = result {
+            let msg = format!("Log stream ended with an error: {e}");
+            let _ = app.emit("pod-log-error", LogEvent { stream_id, data: msg });
         }
-        let _ = app.emit("pod-log-done", ());
+        let _ = app.emit("pod-log-done", LogEvent { stream_id, data: () });
     });
     *state.log_task.lock().unwrap() = Some(handle);
     Ok(())
+}
+
+/// Save log text to the user's Downloads folder and return the path. A
+/// webview Blob download is not reliable across the platforms Tauri targets
+/// and there is no file dialog without an extra plugin, so we write directly.
+#[tauri::command]
+async fn cmd_save_logs(filename: String, content: String) -> Result<String, String> {
+    let safe: String = filename
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '_' })
+        .collect();
+    let safe = if safe.is_empty() || safe.starts_with('.') { format!("log{safe}") } else { safe };
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .ok_or("cannot locate home directory")?;
+    let dir = std::path::PathBuf::from(home).join("Downloads");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(safe);
+    std::fs::write(&path, content).map_err(|e| e.to_string())?;
+    Ok(path.display().to_string())
 }
 
 #[tauri::command]
@@ -463,6 +523,7 @@ fn main() {
             cmd_get_pod_details,
             cmd_stream_pod_logs,
             cmd_stop_pod_logs,
+            cmd_save_logs,
             cmd_get_overview,
             cmd_get_metrics,
             cmd_list_contexts,

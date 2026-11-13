@@ -55,7 +55,29 @@
       <div id="logs-header">
         <h3>Logs</h3>
         <label class="auto-refresh"><input id="log-follow" type="checkbox" checked /> Follow</label>
+        <button id="log-pause" type="button">Pause</button>
         <button id="log-clear" type="button">Clear</button>
+        <button id="log-download" type="button">Download</button>
+      </div>
+      <div id="logs-options">
+        <select id="log-container" title="Container"></select>
+        <label class="auto-refresh"><input id="log-previous" type="checkbox" /> Previous</label>
+        <select id="log-tail" title="Tail lines">
+          <option value="100">100 lines</option>
+          <option value="200" selected>200 lines</option>
+          <option value="1000">1000 lines</option>
+          <option value="5000">5000 lines</option>
+          <option value="all">All lines</option>
+        </select>
+        <select id="log-since" title="Since">
+          <option value="all" selected>All time</option>
+          <option value="300">Last 5m</option>
+          <option value="3600">Last 1h</option>
+        </select>
+        <label class="auto-refresh"><input id="log-timestamps" type="checkbox" /> Timestamps</label>
+        <label class="auto-refresh"><input id="log-wrap" type="checkbox" /> Wrap</label>
+        <input id="log-filter" type="search" placeholder="Filter logs…" />
+        <span id="log-status" class="muted"></span>
       </div>
       <pre id="log-output"></pre>
       <div class="detail-section-header">

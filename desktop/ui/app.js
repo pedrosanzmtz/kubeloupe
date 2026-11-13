@@ -66,6 +66,16 @@ const els = {
   logOutput: document.getElementById("log-output"),
   logFollow: document.getElementById("log-follow"),
   logClear: document.getElementById("log-clear"),
+  logPause: document.getElementById("log-pause"),
+  logDownload: document.getElementById("log-download"),
+  logContainer: document.getElementById("log-container"),
+  logPrevious: document.getElementById("log-previous"),
+  logTail: document.getElementById("log-tail"),
+  logSince: document.getElementById("log-since"),
+  logTimestamps: document.getElementById("log-timestamps"),
+  logWrap: document.getElementById("log-wrap"),
+  logFilter: document.getElementById("log-filter"),
+  logStatus: document.getElementById("log-status"),
   terminal: document.getElementById("terminal"),
   termOpen: document.getElementById("term-open"),
   termClose: document.getElementById("term-close"),
@@ -331,15 +341,181 @@ function setView(view) {
   else loadView();
 }
 
+// ---- Logs -----------------------------------------------------------------
+// Lines live in a bounded buffer (LOG_BUFFER_MAX, trimmed in chunks so it is
+// amortised O(1) per line). The DOM only ever shows the newest LOG_DOM_MAX
+// matching lines, and incoming batches are appended once per animation frame
+// instead of re-rendering the buffer.
+const LOG_BUFFER_MAX = 50000;
+const LOG_DOM_MAX = 5000;
+
+const logs = {
+  streamId: 0,
+  buf: [],
+  pending: [],
+  paused: false,
+  filter: "",
+  raf: 0,
+  filterTimer: 0,
+};
+
+function logLineNode(text) {
+  const div = document.createElement("div");
+  const f = logs.filter;
+  if (!f) {
+    div.textContent = text;
+    return div;
+  }
+  const lower = text.toLowerCase();
+  const needle = f.toLowerCase();
+  let pos = 0;
+  for (;;) {
+    const i = lower.indexOf(needle, pos);
+    if (i < 0) break;
+    if (i > pos) div.appendChild(document.createTextNode(text.slice(pos, i)));
+    const mark = document.createElement("mark");
+    mark.textContent = text.slice(i, i + needle.length);
+    div.appendChild(mark);
+    pos = i + needle.length;
+  }
+  if (pos < text.length) div.appendChild(document.createTextNode(text.slice(pos)));
+  return div;
+}
+
+function logMatches(text) {
+  return !logs.filter || text.toLowerCase().includes(logs.filter.toLowerCase());
+}
+
+function updateLogStatus() {
+  const n = logs.buf.length;
+  els.logStatus.textContent =
+    (logs.paused ? "paused · " : "") + n.toLocaleString() + (n >= LOG_BUFFER_MAX ? "+" : "") + " lines";
+}
+
+function isAtBottom() {
+  return els.logOutput.scrollHeight - els.logOutput.scrollTop - els.logOutput.clientHeight < 40;
+}
+
+// Append system messages (errors, "stream ended"); these are not part of the buffer.
 function appendLog(text, cls) {
-  const atBottom =
-    els.logOutput.scrollHeight - els.logOutput.scrollTop - els.logOutput.clientHeight < 40;
+  const atBottom = isAtBottom();
   const div = document.createElement("div");
   if (cls) div.className = cls;
   div.textContent = text;
   els.logOutput.appendChild(div);
-  if (state.logFollow && atBottom) {
-    els.logOutput.scrollTop = els.logOutput.scrollHeight;
+  if (state.logFollow && atBottom) els.logOutput.scrollTop = els.logOutput.scrollHeight;
+}
+
+function flushLogs() {
+  logs.raf = 0;
+  if (logs.paused || logs.pending.length === 0) return;
+  const lines = logs.pending;
+  logs.pending = [];
+  const atBottom = isAtBottom();
+  const frag = document.createDocumentFragment();
+  for (const line of lines) {
+    if (logMatches(line)) frag.appendChild(logLineNode(line));
+  }
+  els.logOutput.appendChild(frag);
+  let extra = els.logOutput.childElementCount - LOG_DOM_MAX;
+  while (extra-- > 0) els.logOutput.removeChild(els.logOutput.firstChild);
+  if (state.logFollow && atBottom) els.logOutput.scrollTop = els.logOutput.scrollHeight;
+  updateLogStatus();
+}
+
+function onLogBatch(lines) {
+  const buf = logs.buf;
+  for (const l of lines) buf.push(l);
+  if (buf.length > LOG_BUFFER_MAX + LOG_BUFFER_MAX / 10) {
+    buf.splice(0, buf.length - LOG_BUFFER_MAX);
+  }
+  if (logs.paused) {
+    updateLogStatus();
+    return;
+  }
+  for (const l of lines) logs.pending.push(l);
+  if (!logs.raf) logs.raf = requestAnimationFrame(flushLogs);
+}
+
+// Rebuild the DOM from the buffer (filter change, resume).
+function renderLogs() {
+  logs.pending = [];
+  els.logOutput.textContent = "";
+  const frag = document.createDocumentFragment();
+  const picked = [];
+  for (let i = logs.buf.length - 1; i >= 0 && picked.length < LOG_DOM_MAX; i--) {
+    if (logMatches(logs.buf[i])) picked.push(logs.buf[i]);
+  }
+  for (let i = picked.length - 1; i >= 0; i--) frag.appendChild(logLineNode(picked[i]));
+  els.logOutput.appendChild(frag);
+  if (state.logFollow) els.logOutput.scrollTop = els.logOutput.scrollHeight;
+  updateLogStatus();
+}
+
+function resetLogs() {
+  logs.buf = [];
+  logs.pending = [];
+  els.logOutput.textContent = "";
+  updateLogStatus();
+}
+
+function setLogPaused(paused) {
+  logs.paused = paused;
+  els.logPause.textContent = paused ? "Resume" : "Pause";
+  els.logPause.classList.toggle("active", paused);
+  if (!paused) renderLogs();
+  else updateLogStatus();
+}
+
+function populateLogContainers(list) {
+  els.logContainer.innerHTML = "";
+  for (const c of list) {
+    const opt = document.createElement("option");
+    opt.value = c.name;
+    opt.textContent = c.init ? `${c.name} (init)` : c.name;
+    els.logContainer.appendChild(opt);
+  }
+  const firstMain = list.find((c) => !c.init);
+  if (firstMain) els.logContainer.value = firstMain.name;
+}
+
+async function startLogs() {
+  const pod = state.selectedPod;
+  if (!pod) return;
+  resetLogs();
+  setLogPaused(false);
+  const since = els.logSince.value;
+  const tail = els.logTail.value;
+  logs.streamId += 1;
+  try {
+    await invoke("cmd_stream_pod_logs", {
+      namespace: pod.namespace,
+      name: pod.name,
+      container: els.logContainer.value || null,
+      previous: els.logPrevious.checked,
+      tailLines: tail === "all" ? null : Number(tail),
+      sinceSeconds: since === "all" ? null : Number(since),
+      timestamps: els.logTimestamps.checked,
+      streamId: logs.streamId,
+    });
+  } catch (e) {
+    appendLog("Could not start log stream: " + e, "error-text");
+  }
+}
+
+async function downloadLogs() {
+  const pod = state.selectedPod;
+  if (!pod) return;
+  const container = els.logContainer.value || "pod";
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const filename = `${pod.name}_${container}${els.logPrevious.checked ? "_previous" : ""}_${stamp}.log`;
+  try {
+    // Written by the backend: Blob/anchor downloads are not reliable in
+    // Tauri's webviews, and a save dialog would need an extra plugin.
+    const path = await invoke("cmd_save_logs", { filename, content: logs.buf.join("\n") + "\n" });
+    els.logStatus.textContent = "saved to " + path;
+  } catch (e) {
+    appendLog("Could not save logs: " + e, "error-text");
   }
 }
 
@@ -347,7 +523,9 @@ async function openDetail(namespace, name) {
   state.selectedPod = { namespace, name };
   els.detailTitle.textContent = `${namespace}/${name}`;
   els.detailBody.innerHTML = "<p class='muted'>Loading…</p>";
-  els.logOutput.innerHTML = "";
+  resetLogs();
+  els.logPrevious.checked = false;
+  els.logContainer.innerHTML = "";
   closeTerminal();
   stopPortForward();
   els.yamlEditor.value = "";
@@ -356,6 +534,7 @@ async function openDetail(namespace, name) {
   try {
     const d = await invoke("cmd_get_pod_details", { namespace, name });
     state.detailContainers = d.containers || [];
+    populateLogContainers(d.log_containers || []);
     const labels = Object.entries(d.labels || {})
       .map(([k, v]) => `<span class="label-chip">${escapeHtml(k)}=${escapeHtml(v)}</span>`)
       .join(" ");
@@ -386,11 +565,7 @@ async function openDetail(namespace, name) {
     els.detailBody.innerHTML = `<p class="error-text">Could not load pod details: ${escapeHtml(String(e))}</p>`;
   }
   loadYaml();
-  try {
-    await invoke("cmd_stream_pod_logs", { namespace, name });
-  } catch (e) {
-    appendLog("Could not start log stream: " + e, "error-text");
-  }
+  await startLogs();
 }
 
 async function closeDetail() {
@@ -398,7 +573,8 @@ async function closeDetail() {
   state.selectedPod = null;
   state.detailContainers = [];
   els.detail.classList.add("hidden");
-  els.logOutput.innerHTML = "";
+  logs.streamId += 1;
+  resetLogs();
   closeTerminal();
   stopPortForward();
   try {
@@ -582,14 +758,30 @@ window.addEventListener("resize", () => {
 els.logFollow.addEventListener("change", (e) => {
   state.logFollow = e.target.checked;
 });
-els.logClear.addEventListener("click", () => {
-  els.logOutput.innerHTML = "";
+els.logClear.addEventListener("click", resetLogs);
+els.logPause.addEventListener("click", () => setLogPaused(!logs.paused));
+els.logDownload.addEventListener("click", downloadLogs);
+for (const el of [els.logContainer, els.logPrevious, els.logTail, els.logSince, els.logTimestamps]) {
+  el.addEventListener("change", startLogs);
+}
+els.logWrap.addEventListener("change", (e) => {
+  els.logOutput.classList.toggle("wrap", e.target.checked);
+});
+els.logFilter.addEventListener("input", (e) => {
+  clearTimeout(logs.filterTimer);
+  logs.filterTimer = setTimeout(() => {
+    logs.filter = e.target.value;
+    renderLogs();
+  }, 150);
 });
 
 (async () => {
-  await listen("pod-log", (event) => appendLog(event.payload));
-  await listen("pod-log-done", () => appendLog("[stream ended]", "muted"));
-  await listen("pod-log-error", (event) => appendLog(event.payload, "error-text"));
+  // Events carry the id of the stream that produced them; ignore stragglers
+  // from a stream that has since been replaced.
+  const current = (event) => event.payload.streamId === logs.streamId;
+  await listen("pod-log", (event) => current(event) && onLogBatch(event.payload.data));
+  await listen("pod-log-done", (event) => current(event) && appendLog("[stream ended]", "muted"));
+  await listen("pod-log-error", (event) => current(event) && appendLog(event.payload.data, "error-text"));
   // Output can arrive before cmd_exec_start resolves and state.execSession
   // is set, so while a terminal is open without a session yet, accept
   // output for it as well.
