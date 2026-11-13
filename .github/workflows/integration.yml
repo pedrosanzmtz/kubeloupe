@@ -1,0 +1,49 @@
+name: Integration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  cluster:
+    name: integration (kind)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2.7.8
+
+      # Same script as local development: kind cluster + metrics-server +
+      # demo workload.
+      - name: Create kind cluster
+        run: bash scripts/test-cluster/setup.sh
+
+      - name: Build tests
+        run: cargo test --test cluster --no-run
+
+      - name: Wait for demo pods
+        run: |
+          kubectl --context kind-kubeloupe-test -n demo wait --for=condition=Ready \
+            pod/multi pod -l app=web --timeout=180s
+          kubectl --context kind-kubeloupe-test -n demo wait --for=condition=Ready \
+            pod -l app=logger --timeout=180s
+
+      - name: Integration tests
+        run: cargo test -- --ignored --test-threads=4
+
+      - name: Debug info
+        if: failure()
+        run: |
+          kubectl --context kind-kubeloupe-test get pods -A -o wide || true
+          kubectl --context kind-kubeloupe-test get events -A --sort-by=.lastTimestamp || true
+          kubectl --context kind-kubeloupe-test -n kube-system logs deploy/metrics-server --tail=50 || true
+          kubectl --context kind-kubeloupe-test describe pods -n demo || true

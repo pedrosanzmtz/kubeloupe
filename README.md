@@ -118,6 +118,22 @@ Delete the clusters with `kind delete cluster --name kubeloupe-test` (and
 containers normally restart with Docker after a reboot; if a cluster comes
 back broken, delete it and re-run the script.
 
+### Integration tests
+
+`tests/cluster.rs` exercises the library against the kind cluster (listing,
+logs, exec, port-forward, YAML apply, metrics, watches). The tests are
+`#[ignore]`d so plain `cargo test` stays fast. With the cluster up:
+
+```sh
+cargo test -- --ignored
+```
+
+They use the `kind-kubeloupe-test` context; set `KUBELOUPE_TEST_CONTEXT` to
+target another one. Tests that create things use a temporary namespace and
+clean up after themselves. CI runs the same thing in
+`.github/workflows/integration.yml`. The metrics test waits up to a few
+minutes on a freshly created cluster.
+
 ## Roadmap
 
 - [x] Cluster overview: counts, pods by namespace, recent events
