@@ -6,11 +6,23 @@
   import Footer from "./lib/components/Footer.svelte";
   import Toolbar from "./lib/components/Toolbar.svelte";
   import Overview from "./lib/components/Overview.svelte";
+  import TableView from "./lib/components/TableView.svelte";
+  import DetailPanel from "./lib/components/DetailPanel.svelte";
   import { app, loadContexts, loadNamespaces } from "./lib/stores/app.svelte";
+  import { detail } from "./lib/stores/detail.svelte";
+  import { live } from "./lib/stores/live.svelte";
 
-  onMount(async () => {
-    await loadContexts();
-    await loadNamespaces();
+  onMount(() => {
+    // Subscribe before the first watch starts; events that still race ahead
+    // of cmd_watch_start's reply are buffered by the live store.
+    const unlisten = live.listen();
+    (async () => {
+      await loadContexts();
+      await loadNamespaces();
+    })();
+    return () => {
+      unlisten.then((un) => un());
+    };
   });
 </script>
 
@@ -25,11 +37,16 @@
     {#if app.view === "overview"}
       <Overview />
     {:else}
-      <p class="placeholder muted">
-        The {app.view} table is being ported to Svelte and arrives in the next change.
-      </p>
+      {#key app.view}
+        <TableView kind={app.view} />
+      {/key}
     {/if}
   </section>
+  {#if detail.pod && app.view === "pods"}
+    {#key detail.nonce}
+      <DetailPanel pod={detail.pod} />
+    {/key}
+  {/if}
 </div>
 <Footer />
 
@@ -44,9 +61,5 @@
     display: flex;
     flex-direction: column;
     min-width: 0;
-  }
-  .placeholder {
-    text-align: center;
-    padding: 32px 0;
   }
 </style>

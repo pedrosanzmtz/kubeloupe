@@ -1,5 +1,6 @@
 import { commands } from "../bindings";
 import type { ContextInfo, NamespaceInfo } from "../bindings";
+import { closeDetail } from "./detail.svelte";
 
 export type View = "overview" | "pods" | "namespaces" | "nodes";
 
@@ -56,6 +57,7 @@ export async function loadNamespaces() {
 }
 
 export function setView(view: View) {
+  closeDetail();
   app.view = view;
   app.count = "";
   app.updated = "";
@@ -73,11 +75,13 @@ export async function switchContext(name: string) {
     showError("Could not switch context: " + e);
     return;
   }
+  closeDetail();
   app.namespace = "";
   await loadNamespaces();
   refresh();
 }
 
 export function switchNamespace(namespace: string) {
+  closeDetail();
   app.namespace = namespace;
 }
