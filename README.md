@@ -44,6 +44,26 @@ On Linux, Tauri needs the WebKitGTK system libraries first
 (`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `libayatana-appindicator3-dev`,
 `librsvg2-dev`). On macOS and Windows they are not needed.
 
+## Install
+
+Download the latest build from the
+[Releases page](https://github.com/pedrosanzmtz/kubeloupe/releases/latest):
+
+- Linux: `.AppImage` (`chmod +x` it and run) or `.deb` (`sudo apt install ./kubeloupe_*.deb`)
+- macOS: `.dmg` (universal, Apple silicon and Intel)
+- Windows: `.msi` or the NSIS `-setup.exe`
+- CLI only: `kubeloupe-cli-<version>-<target>.tar.gz` (`.zip` on Windows)
+
+The builds are not signed yet, so the OS will warn you the first time:
+
+- macOS: drag the app to Applications, then right-click it and choose Open
+  (then Open again). If macOS says the app is damaged, run
+  `xattr -dr com.apple.quarantine /Applications/kubeloupe.app`.
+- Windows: SmartScreen shows "Windows protected your PC"; click
+  More info, then Run anyway.
+- Linux needs no workaround; the AppImage needs FUSE 2 (`libfuse2`) on
+  recent Ubuntu.
+
 ## Prerequisites
 
 - Rust (stable) — `cargo` on your `PATH`

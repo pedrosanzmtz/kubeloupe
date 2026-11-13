@@ -1,0 +1,148 @@
+name: Release
+
+# Pushing a tag like v0.1.0 builds the desktop installers and CLI binaries for
+# Linux, macOS and Windows and attaches them to a GitHub Release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  create-release:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check that the tag matches the crate versions
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          for f in Cargo.toml desktop/Cargo.toml; do
+            v=$(grep -m1 '^version' "$f" | sed -E 's/.*"(.*)".*/\1/')
+            [ "$v" = "$tag" ] || { echo "$f version $v != tag $tag"; exit 1; }
+          done
+          v=$(python3 -c "import json;print(json.load(open('desktop/tauri.conf.json'))['version'])")
+          [ "$v" = "$tag" ] || { echo "tauri.conf.json version $v != tag $tag"; exit 1; }
+
+      - name: Create the release with generated notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pre=""
+          case "$GITHUB_REF_NAME" in *-*) pre="--prerelease";; esac
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
+            gh release create "$GITHUB_REF_NAME" \
+              --title "kubeloupe $GITHUB_REF_NAME" \
+              --generate-notes --verify-tag $pre
+
+  desktop:
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            args: ""
+            targets: ""
+          - os: macos-latest
+            args: "--target universal-apple-darwin"
+            targets: "aarch64-apple-darwin,x86_64-apple-darwin"
+          - os: windows-latest
+            args: ""
+            targets: ""
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev libssl-dev \
+            libxdo-dev patchelf
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.targets }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install the Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+
+      # build.rs writes desktop/icons/icon.png at build time, but the bundler
+      # also needs .ico/.icns/sized PNGs, so extract the embedded icon and
+      # expand it with `cargo tauri icon` before bundling.
+      - name: Generate app icons
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import base64, re
+          src = open("desktop/build.rs").read()
+          b64 = re.search(r'ICON_PNG_BASE64: &str = "([^"]+)"', src).group(1)
+          open("desktop/icons/icon.png", "wb").write(base64.b64decode(b64))
+          PY
+          cargo tauri icon desktop/icons/icon.png --output desktop/icons
+
+      - uses: tauri-apps/tauri-action@v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: desktop
+          tauriScript: cargo tauri
+          tagName: ${{ github.ref_name }}
+          releaseName: kubeloupe ${{ github.ref_name }}
+          releaseDraft: false
+          args: >-
+            ${{ matrix.args }}
+            --config '{"bundle":{"icon":["icons/32x32.png","icons/128x128.png","icons/128x128@2x.png","icons/icon.icns","icons/icon.ico"]}}'
+
+  cli:
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build the CLI
+        run: cargo build --release --locked -p kubeloupe --target ${{ matrix.target }}
+
+      - name: Package and upload
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          name="kubeloupe-cli-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          out="target/${{ matrix.target }}/release"
+          mkdir "$name"
+          cp README.md "$name/"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp "$out/kubeloupe.exe" "$name/"
+            7z a "$name.zip" "$name"
+            asset="$name.zip"
+          else
+            cp "$out/kubeloupe" "$name/"
+            tar czf "$name.tar.gz" "$name"
+            asset="$name.tar.gz"
+          fi
+          gh release upload "$GITHUB_REF_NAME" "$asset" --clobber
