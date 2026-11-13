@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use kubeloupe::{
+    client,
     exec_in_pod, list_namespaces, list_nodes, list_pods, print_pod_logs, print_pod_yaml,
     print_top_nodes, print_top_pods, run_port_forward,
 };
@@ -83,26 +84,27 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
+    let client = client().await?;
     match cli.command {
-        Commands::Pods { namespace } => list_pods(namespace.as_deref()).await?,
-        Commands::Namespaces => list_namespaces().await?,
-        Commands::Nodes => list_nodes().await?,
+        Commands::Pods { namespace } => list_pods(&client, namespace.as_deref()).await?,
+        Commands::Namespaces => list_namespaces(&client).await?,
+        Commands::Nodes => list_nodes(&client).await?,
         Commands::Logs { name, namespace, tail } => {
-            print_pod_logs(namespace.as_deref(), &name, tail).await?
+            print_pod_logs(&client, namespace.as_deref(), &name, tail).await?
         }
         Commands::Top { resource } => match resource.as_str() {
-            "pods" => print_top_pods().await?,
-            "nodes" => print_top_nodes().await?,
+            "pods" => print_top_pods(&client).await?,
+            "nodes" => print_top_nodes(&client).await?,
             other => anyhow::bail!("unknown resource for top: {other} (use pods or nodes)"),
         },
         Commands::Yaml { name, namespace } => {
-            print_pod_yaml(namespace.as_deref(), &name).await?
+            print_pod_yaml(&client, namespace.as_deref(), &name).await?
         }
         Commands::PortForward { name, port, namespace } => {
-            run_port_forward(namespace.as_deref(), &name, port).await?
+            run_port_forward(&client, namespace.as_deref(), &name, port).await?
         }
         Commands::Exec { name, namespace, container, command } => {
-            exec_in_pod(namespace.as_deref(), &name, container.as_deref(), &command).await?
+            exec_in_pod(&client, namespace.as_deref(), &name, container.as_deref(), &command).await?
         }
     }
     Ok(())
