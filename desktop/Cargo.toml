@@ -1,0 +1,12 @@
+[package]
+name = "kubeloupe-desktop"
+version = "0.1.0"
+edition = "2021"
+description = "kubeloupe desktop app — a Lens alternative in Rust, built with Tauri"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+kubeloupe = { path = ".." }
+tauri = { version = "2", features = [] }

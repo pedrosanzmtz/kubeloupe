@@ -1,3 +1,7 @@
+[workspace]
+members = [".", "desktop"]
+resolver = "2"
+
 [package]
 name = "kubeloupe"
 version = "0.1.0"
@@ -8,9 +12,11 @@ repository = "https://github.com/pedrosanzmtz/kubeloupe"
 
 [dependencies]
 anyhow = "1"
+chrono = "0.4"
 clap = { version = "4", features = ["derive"] }
 k8s-openapi = { version = "0.26", features = ["latest"] }
 kube = { version = "2", features = ["runtime"] }
+serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

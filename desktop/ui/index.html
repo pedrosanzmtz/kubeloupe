@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>kubeloupe</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="brand">kubeloupe</div>
+    <div class="cluster">
+      <span id="status-dot" class="dot unknown"></span>
+      <span id="status-text">Connecting…</span>
+    </div>
+    <button id="refresh-btn" type="button">Refresh</button>
+  </header>
+
+  <div id="main">
+    <nav id="sidebar">
+      <button class="nav-btn active" data-view="pods" type="button">Pods</button>
+      <button class="nav-btn" data-view="namespaces" type="button">Namespaces</button>
+      <button class="nav-btn" data-view="nodes" type="button">Nodes</button>
+    </nav>
+
+    <section id="content">
+      <div id="toolbar">
+        <select id="namespace-select" aria-label="Namespace">
+          <option value="">All namespaces</option>
+        </select>
+        <input id="search-input" type="search" placeholder="Filter…" aria-label="Filter" />
+        <label class="auto-refresh"><input id="auto-refresh" type="checkbox" checked /> Auto-refresh (30s)</label>
+      </div>
+      <div id="error" class="hidden"></div>
+      <div id="table-wrap">
+        <table>
+          <thead id="table-head"></thead>
+          <tbody id="table-body"></tbody>
+        </table>
+        <p id="empty" class="hidden">No items found.</p>
+      </div>
+    </section>
+  </div>
+
+  <footer>
+    <span id="count"></span>
+    <span id="updated"></span>
+  </footer>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
