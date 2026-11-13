@@ -6,6 +6,7 @@ description = "kubeloupe desktop app — a Lens alternative in Rust, built with 
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+base64 = "0.22"
 
 [dependencies]
 kubeloupe = { path = ".." }
