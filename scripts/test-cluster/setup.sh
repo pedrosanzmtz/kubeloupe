@@ -24,19 +24,17 @@ else
   KUBECTL="$(find "$HOME/.kwok/cache" -name kubectl -type f 2>/dev/null | head -1)"
 fi
 
-# 1. Install kwokctl + kwok if missing.
+# Install into ~/.local/bin (kept in $HOME, so it survives VM replacements
+# on ephemeral machines) and make sure it is on PATH for this run.
+export PATH="$HOME/.local/bin:$PATH"
 if ! command -v kwokctl >/dev/null 2>&1; then
   OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
   ARCH="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
-  echo "Installing kwokctl ${KWOK_VERSION} (${OS}/${ARCH})..."
-  curl -sfL "https://github.com/kubernetes-sigs/kwok/releases/download/${KWOK_VERSION}/kwokctl-${OS}-${ARCH}" -o /tmp/kwokctl
-  curl -sfL "https://github.com/kubernetes-sigs/kwok/releases/download/${KWOK_VERSION}/kwok-${OS}-${ARCH}" -o /tmp/kwok
-  chmod +x /tmp/kwokctl /tmp/kwok
-  if [ -w /usr/local/bin ]; then
-    mv /tmp/kwokctl /tmp/kwok /usr/local/bin/
-  else
-    sudo mv /tmp/kwokctl /tmp/kwok /usr/local/bin/
-  fi
+  echo "Installing kwokctl ${KWOK_VERSION} (${OS}/${ARCH}) to ~/.local/bin..."
+  mkdir -p "$HOME/.local/bin"
+  curl -sfL "https://github.com/kubernetes-sigs/kwok/releases/download/${KWOK_VERSION}/kwokctl-${OS}-${ARCH}" -o "$HOME/.local/bin/kwokctl"
+  curl -sfL "https://github.com/kubernetes-sigs/kwok/releases/download/${KWOK_VERSION}/kwok-${OS}-${ARCH}" -o "$HOME/.local/bin/kwok"
+  chmod +x "$HOME/.local/bin/kwokctl" "$HOME/.local/bin/kwok"
 fi
 
 # 2. Create the clusters (skip ones that already exist).

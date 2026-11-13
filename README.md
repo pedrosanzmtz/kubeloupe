@@ -75,7 +75,10 @@ else — lists, details, events, overview, context switching — works against
 the real API server.
 
 Stop the clusters with `kwokctl delete cluster --name kubeloupe-test` (and
-`kubeloupe-staging`); re-run the script to recreate them.
+`kubeloupe-staging`); re-run the script to recreate them. If the machine
+restarts, the cluster processes stop but their state persists under
+`~/.kwok` — bring them back with `kwokctl start cluster --name
+kubeloupe-test` (and `kubeloupe-staging`); the kubeconfig stays valid.
 
 ## Roadmap
 
