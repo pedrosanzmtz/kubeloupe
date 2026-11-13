@@ -4,10 +4,12 @@
   "version": "0.1.0",
   "identifier": "com.kubeloupe.app",
   "build": {
-    "frontendDist": "ui"
+    "beforeDevCommand": "npm --prefix ui-src run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm --prefix ui-src run build",
+    "frontendDist": "ui-src/dist"
   },
   "app": {
-    "withGlobalTauri": true,
     "windows": [
       {
         "title": "kubeloupe",
@@ -18,7 +20,13 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["appimage", "deb", "dmg", "msi", "nsis"],
+    "targets": [
+      "appimage",
+      "deb",
+      "dmg",
+      "msi",
+      "nsis"
+    ],
     "category": "DeveloperTool",
     "shortDescription": "A Lens alternative written in Rust - a Kubernetes IDE",
     "publisher": "kubeloupe"

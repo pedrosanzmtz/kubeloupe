@@ -72,6 +72,18 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: desktop/ui-src/.nvmrc
+          cache: npm
+          cache-dependency-path: desktop/ui-src/package-lock.json
+
+      # tauri.conf.json's beforeBuildCommand builds the frontend, but it needs
+      # the dependencies installed first.
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: desktop/ui-src
+
       - name: Install the Tauri CLI
         run: cargo install tauri-cli --version "^2" --locked
 

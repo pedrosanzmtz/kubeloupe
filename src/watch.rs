@@ -62,6 +62,7 @@ impl Keyed for NodeInfo {
 
 /// Connection state of a watch.
 #[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(tag = "state", rename_all = "lowercase")]
 pub enum WatchState {
     /// Waiting for the first full list.
@@ -86,6 +87,7 @@ pub enum Update<T> {
 
 /// A coalesced set of changes.
 #[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct Batch<T> {
     /// When true, `applied` is the full state and anything not in it is gone.
     pub snapshot: bool,
