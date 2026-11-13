@@ -144,7 +144,11 @@ impl<T: Keyed + Clone> Batcher<T> {
         self.applied.clear();
         self.deleted.clear();
         self.known = items.iter().map(|i| (i.key(), i.clone())).collect();
-        Batch { snapshot: true, applied: items, deleted: Vec::new() }
+        Batch {
+            snapshot: true,
+            applied: items,
+            deleted: Vec::new(),
+        }
     }
 
     /// Take the pending changes, or `None` if nothing visible changed.
@@ -167,7 +171,11 @@ impl<T: Keyed + Clone> Batcher<T> {
         }
         applied.sort_by_key(|i| i.key());
         deleted.sort();
-        Some(Batch { snapshot: false, applied, deleted })
+        Some(Batch {
+            snapshot: false,
+            applied,
+            deleted,
+        })
     }
 }
 
@@ -223,7 +231,9 @@ impl<T> Tracker<T> {
                 if !self.failing {
                     self.failing = true;
                     self.live = false;
-                    out.push(Update::State(WatchState::Reconnecting { error: e.to_string() }));
+                    out.push(Update::State(WatchState::Reconnecting {
+                        error: e.to_string(),
+                    }));
                 }
             }
             Ok(event) => {
@@ -272,11 +282,19 @@ where
         writer,
         watcher::watcher(api, watcher::Config::default()).default_backoff(),
     );
-    let tracker = Tracker { init: Vec::new(), live: false, failing: false };
+    let tracker = Tracker {
+        init: Vec::new(),
+        live: false,
+        failing: false,
+    };
     let updates = events
-        .scan(tracker, move |t, event| futures::future::ready(Some(t.step(event, convert))))
+        .scan(tracker, move |t, event| {
+            futures::future::ready(Some(t.step(event, convert)))
+        })
         .flat_map(stream::iter);
-    let first = stream::once(futures::future::ready(Update::State(WatchState::Connecting)));
+    let first = stream::once(futures::future::ready(Update::State(
+        WatchState::Connecting,
+    )));
     (store, first.chain(updates).boxed())
 }
 
@@ -414,14 +432,23 @@ mod tests {
 
     #[test]
     fn tracker_snapshots_on_init_done_and_reports_failures_once() {
-        let mut t = Tracker::<String> { init: vec![], live: false, failing: false };
+        let mut t = Tracker::<String> {
+            init: vec![],
+            live: false,
+            failing: false,
+        };
         let conv = |s: &String| s.clone();
         assert!(t.step(Ok(Event::Init), conv).is_empty());
-        assert!(t.step(Ok(Event::InitApply("a".to_string())), conv).is_empty());
+        assert!(t
+            .step(Ok(Event::InitApply("a".to_string())), conv)
+            .is_empty());
         let out = t.step(Ok(Event::InitDone), conv);
         assert_eq!(
             out,
-            vec![Update::Snapshot(vec!["a".to_string()]), Update::State(WatchState::Live)]
+            vec![
+                Update::Snapshot(vec!["a".to_string()]),
+                Update::State(WatchState::Live)
+            ]
         );
         let err = || Err(watcher::Error::NoResourceVersion);
         assert_eq!(t.step(err(), conv).len(), 1);

@@ -1,5 +1,7 @@
 # kubeloupe
 
+[![CI](https://github.com/pedrosanzmtz/kubeloupe/actions/workflows/ci.yml/badge.svg)](https://github.com/pedrosanzmtz/kubeloupe/actions/workflows/ci.yml)
+
 A Lens alternative written in Rust — a Kubernetes IDE that stays fast while
 streaming logs and watching cluster state.
 
