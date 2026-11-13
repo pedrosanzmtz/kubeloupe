@@ -1,4 +1,5 @@
 :root {
+  color-scheme: dark;
   --bg: #14171c;
   --bg-raised: #1b1f26;
   --bg-hover: #232830;
@@ -100,6 +101,21 @@ header {
   border-radius: 6px;
   padding: 6px 10px;
   font-size: 13px;
+}
+/* WebKitGTK renders <select> with the native light widget unless the
+   native appearance is turned off, which is what washed the text out. */
+#namespace-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%239aa3b0' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 28px;
+  cursor: pointer;
+}
+#namespace-select option {
+  background: var(--bg-raised);
+  color: var(--text);
 }
 #search-input { width: 220px; }
 .auto-refresh { color: var(--text-muted); font-size: 13px; display: flex; align-items: center; gap: 6px; }

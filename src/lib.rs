@@ -8,7 +8,42 @@ use serde::Serialize;
 
 /// Build a client from the current kubeconfig (or in-cluster config).
 pub async fn client() -> Result<Client> {
-    Ok(Client::try_default().await?)
+    let mut config = kube::Config::infer().await?;
+    if !kubeconfig_sets_proxy() {
+        // kube-rs takes HTTPS_PROXY from the environment as the cluster
+        // proxy and has no no_proxy support, so on a machine with a proxy
+        // configured it would tunnel even local cluster addresses through
+        // the proxy and fail. Only honour a proxy the kubeconfig sets
+        // explicitly for this cluster.
+        config.proxy_url = None;
+    }
+    Ok(Client::try_from(config)?)
+}
+
+/// Whether the active kubeconfig sets a proxy-url for the current cluster.
+fn kubeconfig_sets_proxy() -> bool {
+    let Ok(kubeconfig) = kube::config::Kubeconfig::read() else {
+        return false;
+    };
+    let Some(current) = kubeconfig.current_context.as_deref() else {
+        return false;
+    };
+    let Some(cluster_name) = kubeconfig
+        .contexts
+        .iter()
+        .find(|c| c.name == current)
+        .and_then(|c| c.context.as_ref())
+        .map(|ctx| ctx.cluster.as_str())
+    else {
+        return false;
+    };
+    kubeconfig
+        .clusters
+        .iter()
+        .find(|c| c.name == cluster_name)
+        .and_then(|c| c.cluster.as_ref())
+        .map(|cluster| cluster.proxy_url.is_some())
+        .unwrap_or(false)
 }
 
 fn age_of(ts: Option<Time>) -> String {
