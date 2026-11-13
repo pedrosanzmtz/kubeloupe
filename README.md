@@ -3,18 +3,21 @@
 A Lens alternative written in Rust — a Kubernetes IDE that stays fast while
 streaming logs and watching cluster state.
 
-> **Status:** early scaffold. The CLI core works against any cluster your
-> kubeconfig can reach. The desktop app (Tauri) is in: Pods, Namespaces and
-> Nodes views with search and auto-refresh.
+> **Status:** the desktop app (Tauri) is in: Overview, Pods, Namespaces and
+> Nodes views, pod details with live log streaming, and multi-cluster
+> switching from the kubeconfig contexts.
 
 ## What it does today
 
-- Desktop app — Pods, Namespaces and Nodes views, with namespace filter,
-  search and 30s auto-refresh (see below)
+- Desktop app — Overview (counts, pods by namespace, recent events),
+  Pods, Namespaces and Nodes views, with namespace filter, search and
+  30s auto-refresh; click a pod for its details and live logs; switch
+  clusters from the context selector in the header (see below)
 - `kubeloupe pods` — list pods across all namespaces (name, namespace, phase, node)
 - `kubeloupe pods -n <namespace>` — list pods in one namespace
 - `kubeloupe namespaces` — list namespaces
 - `kubeloupe nodes` — list nodes with readiness and kubelet version
+- `kubeloupe logs <pod> [-n <namespace>] [--tail N]` — print a pod's logs
 
 ## Desktop app
 
@@ -46,10 +49,12 @@ cargo run -- nodes
 
 ## Roadmap
 
-- [ ] Cluster overview: workloads, events, resource usage
-- [ ] Live log streaming and pod exec
+- [x] Cluster overview: counts, pods by namespace, recent events
+- [ ] Cluster resource usage (needs the metrics API)
+- [x] Live log streaming
+- [ ] Pod exec (terminal into a container)
 - [ ] Port-forwarding and resource YAML editing
-- [ ] Multi-cluster support with fast switching
+- [x] Multi-cluster support with fast switching
 - [x] Desktop UI (Tauri)
 
 ## License

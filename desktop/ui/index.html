@@ -14,11 +14,13 @@
       <span id="status-dot" class="dot unknown"></span>
       <span id="status-text">Connecting…</span>
     </div>
+    <select id="context-select" aria-label="Cluster context"></select>
     <button id="refresh-btn" type="button">Refresh</button>
   </header>
 
   <div id="main">
     <nav id="sidebar">
+      <button class="nav-btn" data-view="overview" type="button">Overview</button>
       <button class="nav-btn active" data-view="pods" type="button">Pods</button>
       <button class="nav-btn" data-view="namespaces" type="button">Namespaces</button>
       <button class="nav-btn" data-view="nodes" type="button">Nodes</button>
@@ -33,6 +35,7 @@
         <label class="auto-refresh"><input id="auto-refresh" type="checkbox" checked /> Auto-refresh (30s)</label>
       </div>
       <div id="error" class="hidden"></div>
+      <div id="overview" class="hidden"></div>
       <div id="table-wrap">
         <table>
           <thead id="table-head"></thead>
@@ -41,6 +44,20 @@
         <p id="empty" class="hidden">No items found.</p>
       </div>
     </section>
+
+    <aside id="detail" class="hidden">
+      <div id="detail-header">
+        <span id="detail-title"></span>
+        <button id="detail-close" type="button" aria-label="Close details">✕</button>
+      </div>
+      <div id="detail-body"></div>
+      <div id="logs-header">
+        <h3>Logs</h3>
+        <label class="auto-refresh"><input id="log-follow" type="checkbox" checked /> Follow</label>
+        <button id="log-clear" type="button">Clear</button>
+      </div>
+      <pre id="log-output"></pre>
+    </aside>
   </div>
 
   <footer>
