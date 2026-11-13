@@ -102,6 +102,7 @@ fn format_age(t: DateTime<Utc>) -> String {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct PodInfo {
     /// Creation time (unix seconds) so a UI can keep `age` fresh itself.
     pub created: i64,
@@ -113,6 +114,7 @@ pub struct PodInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct NamespaceInfo {
     /// Creation time (unix seconds) so a UI can keep `age` fresh itself.
     pub created: i64,
@@ -122,6 +124,7 @@ pub struct NamespaceInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct NodeInfo {
     /// Creation time (unix seconds) so a UI can keep `age` fresh itself.
     pub created: i64,
@@ -132,6 +135,7 @@ pub struct NodeInfo {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct ContainerInfo {
     pub name: String,
     pub image: String,
@@ -142,12 +146,14 @@ pub struct ContainerInfo {
 
 /// A container (regular or init) whose logs can be read.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct LogContainer {
     pub name: String,
     pub init: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct PodDetail {
     pub name: String,
     pub namespace: String,
@@ -162,12 +168,14 @@ pub struct PodDetail {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct ContextInfo {
     pub name: String,
     pub current: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct EventInfo {
     pub kind: String,
     pub reason: String,
@@ -178,6 +186,7 @@ pub struct EventInfo {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct Overview {
     pub namespaces: usize,
     pub nodes: usize,
@@ -726,6 +735,7 @@ pub fn format_memory(bytes: u64) -> String {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct PodUsage {
     pub namespace: String,
     pub name: String,
@@ -734,6 +744,7 @@ pub struct PodUsage {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct NodeUsage {
     pub name: String,
     pub cpu_millicores: u64,

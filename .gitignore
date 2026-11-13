@@ -2,3 +2,5 @@
 desktop/gen/
 .claude/
 desktop/icons/icon.ico
+desktop/ui-src/node_modules
+desktop/ui-src/dist
