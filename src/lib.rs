@@ -3,11 +3,13 @@ use chrono::{DateTime, Utc};
 use futures::{AsyncBufReadExt, TryStreamExt};
 use k8s_openapi::api::core::v1::{Event, Namespace, Node, Pod};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
-use kube::api::{Api, ListParams, LogParams};
+use kube::api::{Api, ApiResource, AttachParams, AttachedProcess, DynamicObject, ListParams, LogParams, Patch, PatchParams};
 use kube::config::KubeConfigOptions;
+use kube::core::GroupVersionKind;
 use kube::Client;
 use serde::Serialize;
 use std::collections::BTreeMap;
+use tokio::io::AsyncReadExt;
 
 /// Build a client for the given context (`None` = the kubeconfig's
 /// current-context), or from in-cluster config.
@@ -510,4 +512,515 @@ pub async fn print_pod_logs(namespace: Option<&str>, name: &str, tail: i64) -> R
     let logs = get_pod_logs(None, namespace.unwrap_or("default"), name, tail).await?;
     print!("{logs}");
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Kubernetes quantities ("150m", "128Mi") — parsing and formatting.
+// ---------------------------------------------------------------------------
+
+/// Parse a CPU quantity into millicores: "150m" -> 150, "1" -> 1000,
+/// "2500n" -> 0, "0.5" -> 500.
+pub fn parse_cpu_quantity(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if let Some(v) = s.strip_suffix('n') {
+        v.parse::<f64>().ok().map(|n| (n / 1_000_000.0).round() as u64)
+    } else if let Some(v) = s.strip_suffix('u') {
+        v.parse::<f64>().ok().map(|u| (u / 1_000.0).round() as u64)
+    } else if let Some(v) = s.strip_suffix('m') {
+        v.parse::<f64>().ok().map(|m| m.round() as u64)
+    } else {
+        s.parse::<f64>().ok().map(|c| (c * 1000.0).round() as u64)
+    }
+}
+
+/// Parse a memory quantity into bytes: "128Mi" -> 134217728, "1Gi",
+/// "512Ki", "100M" (decimal), "123456" (plain bytes).
+pub fn parse_memory_quantity(s: &str) -> Option<u64> {
+    let s = s.trim();
+    for (suffix, mult) in [
+        ("Ki", 1024u64),
+        ("Mi", 1024u64.pow(2)),
+        ("Gi", 1024u64.pow(3)),
+        ("Ti", 1024u64.pow(4)),
+        ("Pi", 1024u64.pow(5)),
+        ("Ei", 1024u64.pow(6)),
+        ("K", 1000u64),
+        ("M", 1000u64.pow(2)),
+        ("G", 1000u64.pow(3)),
+        ("T", 1000u64.pow(4)),
+        ("P", 1000u64.pow(5)),
+        ("E", 1000u64.pow(6)),
+    ] {
+        if let Some(num) = s.strip_suffix(suffix) {
+            return num
+                .parse::<f64>()
+                .ok()
+                .map(|v| (v * mult as f64).round() as u64);
+        }
+    }
+    s.parse::<f64>().ok().map(|v| v.round() as u64)
+}
+
+/// Format millicores for display: 150 -> "150m", 1500 -> "1.5".
+pub fn format_cpu(millicores: u64) -> String {
+    if millicores >= 1000 {
+        let cores = millicores as f64 / 1000.0;
+        let text = format!("{cores:.2}");
+        text.trim_end_matches('0').trim_end_matches('.').to_string()
+    } else {
+        format!("{millicores}m")
+    }
+}
+
+/// Format bytes for display: 134217728 -> "128Mi".
+pub fn format_memory(bytes: u64) -> String {
+    const UNITS: [&str; 6] = ["B", "Ki", "Mi", "Gi", "Ti", "Pi"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes}B")
+    } else {
+        let text = format!("{value:.2}");
+        format!("{}{}", text.trim_end_matches('0').trim_end_matches('.'), UNITS[unit])
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Metrics API (metrics.k8s.io/v1beta1, served by metrics-server).
+// Returns `Ok(None)` when the metrics API is not installed on the cluster.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PodUsage {
+    pub namespace: String,
+    pub name: String,
+    pub cpu_millicores: u64,
+    pub memory_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NodeUsage {
+    pub name: String,
+    pub cpu_millicores: u64,
+    pub cpu_capacity_millicores: u64,
+    pub memory_bytes: u64,
+    pub memory_capacity_bytes: u64,
+}
+
+fn metrics_resource(kind: &str, plural: &str) -> ApiResource {
+    ApiResource::from_gvk_with_plural(
+        &GroupVersionKind::gvk("metrics.k8s.io", "v1beta1", kind),
+        plural,
+    )
+}
+
+fn is_not_found(e: &kube::Error) -> bool {
+    matches!(e, kube::Error::Api(resp) if resp.code == 404)
+}
+
+/// Fetch per-pod CPU/memory usage. `Ok(None)` = metrics API unavailable.
+pub async fn get_pod_metrics(context: Option<&str>) -> Result<Option<Vec<PodUsage>>> {
+    let client = client_for_context(context).await?;
+    let api: Api<DynamicObject> = Api::all_with(client, &metrics_resource("PodMetrics", "pods"));
+    let list = match api.list(&ListParams::default()).await {
+        Ok(list) => list,
+        Err(e) if is_not_found(&e) => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    let mut usages = Vec::new();
+    for item in list.items {
+        // DynamicObject splits metadata out of `data`, so the name and
+        // namespace live on the item itself, not in data["metadata"].
+        let name = item.metadata.name.unwrap_or_default();
+        let namespace = item.metadata.namespace.unwrap_or_default();
+        let data = &item.data;
+        let mut cpu = 0u64;
+        let mut memory = 0u64;
+        if let Some(containers) = data["containers"].as_array() {
+            for c in containers {
+                cpu += c["usage"]["cpu"]
+                    .as_str()
+                    .and_then(parse_cpu_quantity)
+                    .unwrap_or(0);
+                memory += c["usage"]["memory"]
+                    .as_str()
+                    .and_then(parse_memory_quantity)
+                    .unwrap_or(0);
+            }
+        }
+        usages.push(PodUsage { namespace, name, cpu_millicores: cpu, memory_bytes: memory });
+    }
+    Ok(Some(usages))
+}
+
+/// Fetch per-node CPU/memory usage with capacity. `Ok(None)` = metrics API
+/// unavailable.
+pub async fn get_node_metrics(context: Option<&str>) -> Result<Option<Vec<NodeUsage>>> {
+    let client = client_for_context(context).await?;
+    let api: Api<DynamicObject> =
+        Api::all_with(client.clone(), &metrics_resource("NodeMetrics", "nodes"));
+    let list = match api.list(&ListParams::default()).await {
+        Ok(list) => list,
+        Err(e) if is_not_found(&e) => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    let nodes: Api<Node> = Api::all(client);
+    let mut capacities: BTreeMap<String, (u64, u64)> = BTreeMap::new();
+    if let Ok(node_list) = nodes.list(&ListParams::default()).await {
+        for node in node_list.items {
+            let name = node.metadata.name.unwrap_or_default();
+            let (mut cpu_cap, mut mem_cap) = (0u64, 0u64);
+            if let Some(cap) = node.status.and_then(|s| s.capacity) {
+                cpu_cap = cap
+                    .get("cpu")
+                    .map(|q| parse_cpu_quantity(&q.0).unwrap_or(0))
+                    .unwrap_or(0);
+                mem_cap = cap
+                    .get("memory")
+                    .map(|q| parse_memory_quantity(&q.0).unwrap_or(0))
+                    .unwrap_or(0);
+            }
+            capacities.insert(name, (cpu_cap, mem_cap));
+        }
+    }
+    let mut usages = Vec::new();
+    for item in list.items {
+        let name = item.metadata.name.unwrap_or_default();
+        let data = &item.data;
+        let cpu = data["usage"]["cpu"]
+            .as_str()
+            .and_then(parse_cpu_quantity)
+            .unwrap_or(0);
+        let memory = data["usage"]["memory"]
+            .as_str()
+            .and_then(parse_memory_quantity)
+            .unwrap_or(0);
+        let (cpu_cap, mem_cap) = capacities.get(&name).copied().unwrap_or((0, 0));
+        usages.push(NodeUsage {
+            name,
+            cpu_millicores: cpu,
+            cpu_capacity_millicores: cpu_cap,
+            memory_bytes: memory,
+            memory_capacity_bytes: mem_cap,
+        });
+    }
+    Ok(Some(usages))
+}
+
+// ---------------------------------------------------------------------------
+// Pod YAML: read a pod as YAML, apply edited YAML with server-side apply.
+// ---------------------------------------------------------------------------
+
+/// Fetch one pod as YAML (status and managed fields stripped, so the
+/// document is what a human would edit).
+pub async fn get_pod_yaml(context: Option<&str>, namespace: &str, name: &str) -> Result<String> {
+    let client = client_for_context(context).await?;
+    let pods: Api<Pod> = Api::namespaced(client, namespace);
+    let mut pod = pods.get(name).await?;
+    pod.metadata.managed_fields = None;
+    pod.status = None;
+    // k8s-openapi already serializes apiVersion/kind for the Pod.
+    Ok(serde_yaml::to_string(&pod)?)
+}
+
+/// Apply edited pod YAML with server-side apply (field manager "kubeloupe").
+pub async fn apply_pod_yaml(
+    context: Option<&str>,
+    namespace: &str,
+    name: &str,
+    yaml: &str,
+) -> Result<()> {
+    let value: serde_json::Value = serde_yaml::from_str(yaml)?;
+    let client = client_for_context(context).await?;
+    let ar = ApiResource::from_gvk(&GroupVersionKind::gvk("", "v1", "Pod"));
+    let api: Api<DynamicObject> = Api::namespaced_with(client, namespace, &ar);
+    api.patch(
+        name,
+        &PatchParams::apply("kubeloupe"),
+        &Patch::Apply(&value),
+    )
+    .await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Pod exec.
+// ---------------------------------------------------------------------------
+
+/// Open an interactive TTY shell (`/bin/sh`) in a pod. The caller drives
+/// stdin/stdout/stderr and the terminal size on the returned process.
+pub async fn exec_pod(
+    context: Option<&str>,
+    namespace: &str,
+    name: &str,
+    container: Option<&str>,
+) -> Result<AttachedProcess> {
+    let client = client_for_context(context).await?;
+    let pods: Api<Pod> = Api::namespaced(client, namespace);
+    let mut params = AttachParams::interactive_tty();
+    params.container = container.map(str::to_string);
+    Ok(pods.exec(name, ["/bin/sh"], &params).await?)
+}
+
+/// Result of a non-interactive command run in a pod.
+pub struct ExecResult {
+    pub stdout: String,
+    pub stderr: String,
+    pub success: bool,
+}
+
+/// Run a command in a pod (non-TTY) and collect its output.
+pub async fn exec_command(
+    context: Option<&str>,
+    namespace: &str,
+    name: &str,
+    container: Option<&str>,
+    command: &[String],
+) -> Result<ExecResult> {
+    let client = client_for_context(context).await?;
+    let pods: Api<Pod> = Api::namespaced(client, namespace);
+    let params = AttachParams {
+        container: container.map(str::to_string),
+        stdin: false,
+        stdout: true,
+        stderr: true,
+        tty: false,
+        ..AttachParams::default()
+    };
+    let mut attached = pods.exec(name, command, &params).await?;
+    let stdout_reader = attached.stdout();
+    let stderr_reader = attached.stderr();
+    // join() returns Ok even when the command fails — the failure is only
+    // visible on the status channel, so read it too.
+    let status_fut = attached.take_status();
+    let read_stdout = async {
+        match stdout_reader {
+            Some(mut r) => {
+                let mut buf = String::new();
+                let _ = r.read_to_string(&mut buf).await;
+                buf
+            }
+            None => String::new(),
+        }
+    };
+    let read_stderr = async {
+        match stderr_reader {
+            Some(mut r) => {
+                let mut buf = String::new();
+                let _ = r.read_to_string(&mut buf).await;
+                buf
+            }
+            None => String::new(),
+        }
+    };
+    let read_status = async {
+        match status_fut {
+            Some(f) => f.await,
+            None => None,
+        }
+    };
+    let (stdout, mut stderr, joined, status) =
+        tokio::join!(read_stdout, read_stderr, attached.join(), read_status);
+    let mut success = joined.is_ok();
+    if let Some(s) = status {
+        if s.status.as_deref() == Some("Failure") {
+            success = false;
+            if let Some(msg) = s.message {
+                if !stderr.is_empty() {
+                    stderr.push('\n');
+                }
+                stderr.push_str(&msg);
+            }
+        }
+    }
+    Ok(ExecResult {
+        stdout,
+        stderr,
+        success,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Port-forwarding. kube-rs's Portforwarder hands out a raw stream per port
+// and binds nothing itself, so this binds a local TCP listener and, for each
+// incoming connection, opens a fresh port-forward (the kubectl semantics,
+// which also lets several clients connect at once).
+// ---------------------------------------------------------------------------
+
+/// Start forwarding a pod port to an ephemeral localhost port. Returns the
+/// local port and a handle; aborting the handle stops the listener.
+/// Fails fast when the API server cannot forward (e.g. no kubelet).
+pub async fn serve_port_forward(
+    context: Option<&str>,
+    namespace: &str,
+    name: &str,
+    pod_port: u16,
+) -> Result<(u16, tokio::task::JoinHandle<()>)> {
+    // Probe: fail fast instead of only failing when a client connects.
+    let client = client_for_context(context).await?;
+    let pods: Api<Pod> = Api::namespaced(client, namespace);
+    let mut probe = pods.portforward(name, &[pod_port]).await?;
+    let _ = probe.take_stream(pod_port);
+    probe.abort();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let local_port = listener.local_addr()?.port();
+    let ctx_owned = context.map(str::to_string);
+    let ns_owned = namespace.to_string();
+    let name_owned = name.to_string();
+    let handle = tokio::spawn(async move {
+        loop {
+            let Ok((socket, _)) = listener.accept().await else {
+                break;
+            };
+            let ctx = ctx_owned.clone();
+            let ns = ns_owned.clone();
+            let pod = name_owned.clone();
+            tokio::spawn(async move {
+                let Ok(client) = client_for_context(ctx.as_deref()).await else {
+                    return;
+                };
+                let pods: Api<Pod> = Api::namespaced(client, &ns);
+                let Ok(mut pf) = pods.portforward(&pod, &[pod_port]).await else {
+                    return;
+                };
+                if let Some(mut stream) = pf.take_stream(pod_port) {
+                    let mut socket = socket;
+                    let _ = tokio::io::copy_bidirectional(&mut socket, &mut stream).await;
+                }
+            });
+        }
+    });
+    Ok((local_port, handle))
+}
+
+// ---------------------------------------------------------------------------
+// CLI output for the new commands.
+// ---------------------------------------------------------------------------
+
+/// Print `kubectl top pods`-style usage (CLI output).
+pub async fn print_top_pods() -> Result<()> {
+    match get_pod_metrics(None).await? {
+        None => println!("Metrics API not available on this cluster (is metrics-server installed?)"),
+        Some(usages) => {
+            println!("{:<50} {:<20} {:<10} {}", "NAME", "NAMESPACE", "CPU", "MEMORY");
+            for u in usages {
+                println!(
+                    "{:<50} {:<20} {:<10} {}",
+                    u.name,
+                    u.namespace,
+                    format_cpu(u.cpu_millicores),
+                    format_memory(u.memory_bytes)
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Print `kubectl top nodes`-style usage (CLI output).
+pub async fn print_top_nodes() -> Result<()> {
+    match get_node_metrics(None).await? {
+        None => println!("Metrics API not available on this cluster (is metrics-server installed?)"),
+        Some(usages) => {
+            println!("{:<40} {:<16} {}", "NAME", "CPU", "MEMORY");
+            for u in usages {
+                let cpu = if u.cpu_capacity_millicores > 0 {
+                    format!(
+                        "{}/{}",
+                        format_cpu(u.cpu_millicores),
+                        format_cpu(u.cpu_capacity_millicores)
+                    )
+                } else {
+                    format_cpu(u.cpu_millicores)
+                };
+                let mem = if u.memory_capacity_bytes > 0 {
+                    format!(
+                        "{}/{}",
+                        format_memory(u.memory_bytes),
+                        format_memory(u.memory_capacity_bytes)
+                    )
+                } else {
+                    format_memory(u.memory_bytes)
+                };
+                println!("{:<40} {:<16} {}", u.name, cpu, mem);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Print one pod as YAML (CLI output).
+pub async fn print_pod_yaml(namespace: Option<&str>, name: &str) -> Result<()> {
+    let yaml = get_pod_yaml(None, namespace.unwrap_or("default"), name).await?;
+    print!("{yaml}");
+    Ok(())
+}
+
+/// Forward a pod port to localhost until Ctrl-C (CLI output).
+pub async fn run_port_forward(namespace: Option<&str>, name: &str, port: u16) -> Result<()> {
+    let (local_port, handle) =
+        serve_port_forward(None, namespace.unwrap_or("default"), name, port).await?;
+    println!("Forwarding from 127.0.0.1:{local_port} -> {name}:{port} (Ctrl-C to stop)");
+    tokio::signal::ctrl_c().await?;
+    handle.abort();
+    println!("Port-forward stopped.");
+    Ok(())
+}
+
+/// Run a command in a pod and print its output (CLI output).
+pub async fn exec_in_pod(
+    namespace: Option<&str>,
+    name: &str,
+    container: Option<&str>,
+    command: &[String],
+) -> Result<()> {
+    let result = exec_command(None, namespace.unwrap_or("default"), name, container, command).await?;
+    print!("{}", result.stdout);
+    eprint!("{}", result.stderr);
+    if !result.success {
+        anyhow::bail!("command exited with a non-zero status");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cpu_quantities() {
+        assert_eq!(parse_cpu_quantity("150m"), Some(150));
+        assert_eq!(parse_cpu_quantity("1"), Some(1000));
+        assert_eq!(parse_cpu_quantity("0.5"), Some(500));
+        assert_eq!(parse_cpu_quantity("2"), Some(2000));
+        assert_eq!(parse_cpu_quantity("2500n"), Some(0));
+        assert_eq!(parse_cpu_quantity("1500u"), Some(2));
+        assert_eq!(parse_cpu_quantity("bogus"), None);
+    }
+
+    #[test]
+    fn memory_quantities() {
+        assert_eq!(parse_memory_quantity("128Mi"), Some(128 * 1024 * 1024));
+        assert_eq!(parse_memory_quantity("1Gi"), Some(1024 * 1024 * 1024));
+        assert_eq!(parse_memory_quantity("512Ki"), Some(512 * 1024));
+        assert_eq!(parse_memory_quantity("100M"), Some(100 * 1000 * 1000));
+        assert_eq!(parse_memory_quantity("123456"), Some(123456));
+        assert_eq!(parse_memory_quantity("1.5Gi"), Some(1610612736));
+        assert_eq!(parse_memory_quantity("bogus"), None);
+    }
+
+    #[test]
+    fn quantity_formatting() {
+        assert_eq!(format_cpu(150), "150m");
+        assert_eq!(format_cpu(1500), "1.5");
+        assert_eq!(format_cpu(2000), "2");
+        assert_eq!(format_memory(128 * 1024 * 1024), "128Mi");
+        assert_eq!(format_memory(1024 * 1024 * 1024), "1Gi");
+        assert_eq!(format_memory(512), "512B");
+    }
 }

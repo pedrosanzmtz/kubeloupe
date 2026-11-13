@@ -200,7 +200,12 @@ tbody tr.clickable.selected { background: var(--bg-hover); }
   display: flex;
   flex-direction: column;
   min-height: 0;
+  overflow-y: auto;
 }
+/* Sections keep their natural height and the panel scrolls as a whole;
+   without this the flex column squeezes them (e.g. the terminal and the
+   pod meta collapsed to a single row). */
+#detail > * { flex-shrink: 0; }
 #detail-header {
   display: flex;
   align-items: center;
@@ -253,7 +258,7 @@ dl.meta dd { margin: 0; }
   border-top: 1px solid var(--border);
 }
 #logs-header h3 { margin: 0; font-size: 13px; flex: 1; }
-#log-clear {
+#log-clear, #term-open, #term-close, #pf-start, #pf-stop, #yaml-reload, #yaml-save {
   background: transparent;
   color: var(--text-muted);
   border: 1px solid var(--border);
@@ -262,9 +267,11 @@ dl.meta dd { margin: 0; }
   font-size: 12px;
   cursor: pointer;
 }
-#log-clear:hover { color: var(--text); }
+#log-clear:hover, #term-open:hover, #term-close:hover, #pf-start:hover, #pf-stop:hover, #yaml-reload:hover, #yaml-save:hover { color: var(--text); }
+#yaml-save { border-color: var(--accent); color: var(--accent); }
 #log-output {
-  flex: 1;
+  flex: none;
+  height: 200px;
   min-height: 120px;
   margin: 0;
   padding: 10px 16px;
@@ -276,4 +283,49 @@ dl.meta dd { margin: 0; }
   line-height: 1.5;
   white-space: pre;
   border-top: 1px solid var(--border);
+}
+.detail-section-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+}
+.detail-section-header h3 { margin: 0; font-size: 13px; flex: 1; }
+#terminal {
+  height: 240px;
+  padding: 8px 12px;
+  background: #0d1013;
+  border-top: 1px solid var(--border);
+  overflow: hidden;
+}
+#pf-port {
+  width: 80px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.detail-status {
+  margin: 0;
+  padding: 8px 16px;
+  font-size: 12px;
+  word-break: break-all;
+}
+#yaml-editor {
+  width: 100%;
+  min-height: 220px;
+  margin: 0;
+  padding: 10px 16px;
+  background: #0d1013;
+  color: #d6dae0;
+  border: none;
+  border-top: 1px solid var(--border);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
 }

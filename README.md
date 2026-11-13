@@ -4,20 +4,30 @@ A Lens alternative written in Rust — a Kubernetes IDE that stays fast while
 streaming logs and watching cluster state.
 
 > **Status:** the desktop app (Tauri) is in: Overview, Pods, Namespaces and
-> Nodes views, pod details with live log streaming, and multi-cluster
+> Nodes views with CPU/memory usage, pod details with live log streaming, a
+> terminal (pod exec), port-forwarding and YAML editing, and multi-cluster
 > switching from the kubeconfig contexts.
 
 ## What it does today
 
 - Desktop app — Overview (counts, pods by namespace, recent events),
   Pods, Namespaces and Nodes views, with namespace filter, search and
-  30s auto-refresh; click a pod for its details and live logs; switch
+  30s auto-refresh; click a pod for its details and live logs, an
+  interactive terminal (pod exec via xterm.js), port-forwarding to
+  localhost, and a YAML editor with server-side apply; Pods and Nodes
+  show CPU/memory usage when the metrics API is available; switch
   clusters from the context selector in the header (see below)
 - `kubeloupe pods` — list pods across all namespaces (name, namespace, phase, node)
 - `kubeloupe pods -n <namespace>` — list pods in one namespace
 - `kubeloupe namespaces` — list namespaces
 - `kubeloupe nodes` — list nodes with readiness and kubelet version
 - `kubeloupe logs <pod> [-n <namespace>] [--tail N]` — print a pod's logs
+- `kubeloupe top [pods|nodes]` — CPU/memory usage (needs metrics-server)
+- `kubeloupe yaml <pod> [-n <namespace>]` — print a pod as YAML
+- `kubeloupe exec <pod> [-n <namespace>] [-c <container>] -- <command>` —
+  run a command in a pod and print its output
+- `kubeloupe port-forward <pod> <port> [-n <namespace>]` — forward a pod
+  port to localhost until Ctrl-C
 
 ## Desktop app
 
@@ -46,6 +56,10 @@ cargo run -- pods -n kube-system
 cargo run -- namespaces
 cargo run -- nodes
 cargo run -- logs <pod> -n <namespace>
+cargo run -- top pods
+cargo run -- yaml <pod> -n <namespace>
+cargo run -- exec <pod> -n <namespace> -- ls /
+cargo run -- port-forward <pod> 80 -n <namespace>
 ```
 
 ## Test cluster
@@ -68,11 +82,15 @@ It creates:
 It merges both contexts into `~/.kube/config` and leaves `kubeloupe-test`
 current, so `cargo run -p kubeloupe-desktop` opens against the test cluster.
 
-One honest limitation: kwok simulates pods, there is no kubelet, so **pod
-logs are not available** — the log pane shows an error. Log streaming needs
-a cluster with real containers (kind, k3s, or a real cluster). Everything
-else — lists, details, events, overview, context switching — works against
-the real API server.
+One honest limitation: kwok simulates pods, there is no kubelet and no
+metrics-server, so **pod logs, pod exec, and port-forwarding fail** on the
+test clusters (the app shows the real error, e.g. "no exec found for
+container"), and the **CPU/memory columns show "—"**. Those need a cluster
+with real containers (kind, k3s, or a real cluster) and, for usage,
+metrics-server installed. Everything else — lists, details, events,
+overview, context switching, YAML editing — works against the real API
+server. The usage columns are verified against a mock API server that
+serves the metrics.k8s.io API (see `kubeloupe top` against it).
 
 Stop the clusters with `kwokctl delete cluster --name kubeloupe-test` (and
 `kubeloupe-staging`); re-run the script to recreate them. If the machine
@@ -83,10 +101,10 @@ kubeloupe-test` (and `kubeloupe-staging`); the kubeconfig stays valid.
 ## Roadmap
 
 - [x] Cluster overview: counts, pods by namespace, recent events
-- [ ] Cluster resource usage (needs the metrics API)
+- [x] Cluster resource usage (needs the metrics API)
 - [x] Live log streaming
-- [ ] Pod exec (terminal into a container)
-- [ ] Port-forwarding and resource YAML editing
+- [x] Pod exec (terminal into a container)
+- [x] Port-forwarding and resource YAML editing
 - [x] Multi-cluster support with fast switching
 - [x] Desktop UI (Tauri)
 

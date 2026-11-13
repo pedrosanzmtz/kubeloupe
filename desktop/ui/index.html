@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>kubeloupe</title>
 <link rel="stylesheet" href="styles.css" />
+<link rel="stylesheet" href="vendor/xterm.css" />
 </head>
 <body>
 <div id="app">
@@ -57,6 +58,26 @@
         <button id="log-clear" type="button">Clear</button>
       </div>
       <pre id="log-output"></pre>
+      <div class="detail-section-header">
+        <h3>Terminal</h3>
+        <button id="term-open" type="button">Open terminal</button>
+        <button id="term-close" type="button" class="hidden">Close</button>
+      </div>
+      <div id="terminal" class="hidden"></div>
+      <div class="detail-section-header">
+        <h3>Port forward</h3>
+        <input id="pf-port" type="number" value="80" min="1" max="65535" aria-label="Pod port" />
+        <button id="pf-start" type="button">Forward</button>
+        <button id="pf-stop" type="button" class="hidden">Stop</button>
+      </div>
+      <p id="pf-status" class="detail-status muted"></p>
+      <div class="detail-section-header">
+        <h3>YAML</h3>
+        <button id="yaml-reload" type="button">Reload</button>
+        <button id="yaml-save" type="button">Save</button>
+      </div>
+      <textarea id="yaml-editor" spellcheck="false" aria-label="Pod YAML"></textarea>
+      <p id="yaml-status" class="detail-status muted"></p>
     </aside>
   </div>
 
@@ -65,6 +86,8 @@
     <span id="updated"></span>
   </footer>
 </div>
+<script src="vendor/xterm.js"></script>
+<script src="vendor/xterm-addon-fit.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

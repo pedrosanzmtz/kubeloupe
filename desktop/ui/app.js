@@ -8,7 +8,13 @@ const state = {
   namespaces: [],
   timer: null,
   selectedPod: null,
+  detailContainers: [],
   logFollow: true,
+  metrics: { pods: {}, nodes: {} },
+  execSession: null,
+  term: null,
+  fitAddon: null,
+  pfSession: null,
 };
 
 const COLUMNS = {
@@ -18,6 +24,8 @@ const COLUMNS = {
     ["phase", "Phase"],
     ["node", "Node"],
     ["age", "Age"],
+    ["cpu", "CPU"],
+    ["memory", "Memory"],
   ],
   namespaces: [
     ["name", "Name"],
@@ -29,6 +37,8 @@ const COLUMNS = {
     ["ready", "Ready"],
     ["version", "Version"],
     ["age", "Age"],
+    ["cpu", "CPU"],
+    ["memory", "Memory"],
   ],
 };
 
@@ -56,6 +66,17 @@ const els = {
   logOutput: document.getElementById("log-output"),
   logFollow: document.getElementById("log-follow"),
   logClear: document.getElementById("log-clear"),
+  terminal: document.getElementById("terminal"),
+  termOpen: document.getElementById("term-open"),
+  termClose: document.getElementById("term-close"),
+  pfPort: document.getElementById("pf-port"),
+  pfStart: document.getElementById("pf-start"),
+  pfStop: document.getElementById("pf-stop"),
+  pfStatus: document.getElementById("pf-status"),
+  yamlReload: document.getElementById("yaml-reload"),
+  yamlSave: document.getElementById("yaml-save"),
+  yamlEditor: document.getElementById("yaml-editor"),
+  yamlStatus: document.getElementById("yaml-status"),
 };
 
 function setStatus(ok, message) {
@@ -125,6 +146,44 @@ function filtered(rows) {
   );
 }
 
+function formatCpu(millicores) {
+  if (millicores >= 1000) {
+    return (millicores / 1000).toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+  }
+  return millicores + "m";
+}
+
+function formatMemory(bytes) {
+  const units = ["B", "Ki", "Mi", "Gi", "Ti", "Pi"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  if (unit === 0) return bytes + "B";
+  return value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "") + units[unit];
+}
+
+function metricValue(row, key) {
+  let m = null;
+  if (state.view === "pods") {
+    m = state.metrics.pods[`${row.namespace}/${row.name}`];
+    if (!m) return "—";
+    return key === "cpu" ? formatCpu(m.cpu_millicores) : formatMemory(m.memory_bytes);
+  }
+  if (state.view === "nodes") {
+    m = state.metrics.nodes[row.name];
+    if (!m) return "—";
+    return key === "cpu"
+      ? formatCpu(m.cpu_millicores) +
+          (m.cpu_capacity_millicores ? " / " + formatCpu(m.cpu_capacity_millicores) : "")
+      : formatMemory(m.memory_bytes) +
+          (m.memory_capacity_bytes ? " / " + formatMemory(m.memory_capacity_bytes) : "");
+  }
+  return "";
+}
+
 function render(rows) {
   const cols = COLUMNS[state.view];
   els.head.innerHTML =
@@ -135,7 +194,8 @@ function render(rows) {
     .map((row) => {
       const cells = cols
         .map(([key]) => {
-          const value = row[key] ?? "";
+          const value =
+            key === "cpu" || key === "memory" ? metricValue(row, key) : row[key] ?? "";
           const cls = key === "phase" ? ` class="phase-${value}"` : "";
           return `<td${cls}>${escapeHtml(String(value))}</td>`;
         })
@@ -197,6 +257,18 @@ function renderOverview(ov) {
   els.updated.textContent = "Updated " + new Date().toLocaleTimeString();
 }
 
+async function loadMetrics() {
+  try {
+    const snap = await invoke("cmd_get_metrics");
+    state.metrics = { pods: {}, nodes: {} };
+    for (const p of snap.pods) state.metrics.pods[`${p.namespace}/${p.name}`] = p;
+    for (const n of snap.nodes) state.metrics.nodes[n.name] = n;
+  } catch (e) {
+    // Metrics are best effort; the tables show "—" without them.
+    state.metrics = { pods: {}, nodes: {} };
+  }
+}
+
 async function loadView() {
   showError("");
   try {
@@ -211,6 +283,7 @@ async function loadView() {
       rows = await invoke("cmd_list_nodes");
     }
     setStatus(true, "Connected");
+    await loadMetrics();
     render(rows);
   } catch (e) {
     setStatus(false, "Cluster unreachable");
@@ -275,9 +348,14 @@ async function openDetail(namespace, name) {
   els.detailTitle.textContent = `${namespace}/${name}`;
   els.detailBody.innerHTML = "<p class='muted'>Loading…</p>";
   els.logOutput.innerHTML = "";
+  closeTerminal();
+  stopPortForward();
+  els.yamlEditor.value = "";
+  els.yamlStatus.textContent = "";
   els.detail.classList.remove("hidden");
   try {
     const d = await invoke("cmd_get_pod_details", { namespace, name });
+    state.detailContainers = d.containers || [];
     const labels = Object.entries(d.labels || {})
       .map(([k, v]) => `<span class="label-chip">${escapeHtml(k)}=${escapeHtml(v)}</span>`)
       .join(" ");
@@ -307,6 +385,7 @@ async function openDetail(namespace, name) {
   } catch (e) {
     els.detailBody.innerHTML = `<p class="error-text">Could not load pod details: ${escapeHtml(String(e))}</p>`;
   }
+  loadYaml();
   try {
     await invoke("cmd_stream_pod_logs", { namespace, name });
   } catch (e) {
@@ -317,12 +396,134 @@ async function openDetail(namespace, name) {
 async function closeDetail() {
   if (!state.selectedPod) return;
   state.selectedPod = null;
+  state.detailContainers = [];
   els.detail.classList.add("hidden");
   els.logOutput.innerHTML = "";
+  closeTerminal();
+  stopPortForward();
   try {
     await invoke("cmd_stop_pod_logs");
   } catch (e) {
     // Stream was already stopped; nothing to do.
+  }
+}
+
+async function openTerminal() {
+  const pod = state.selectedPod;
+  if (!pod) return;
+  closeTerminal();
+  els.terminal.classList.remove("hidden");
+  els.termOpen.classList.add("hidden");
+  els.termClose.classList.remove("hidden");
+  const term = new Terminal({
+    cursorBlink: true,
+    fontSize: 12,
+    theme: { background: "#0d1013" },
+  });
+  const fitAddon = new FitAddon.FitAddon();
+  term.loadAddon(fitAddon);
+  term.open(els.terminal);
+  fitAddon.fit();
+  state.term = term;
+  state.fitAddon = fitAddon;
+  try {
+    const container = state.detailContainers[0] ? state.detailContainers[0].name : null;
+    const session = await invoke("cmd_exec_start", {
+      namespace: pod.namespace,
+      name: pod.name,
+      container,
+      cols: term.cols,
+      rows: term.rows,
+    });
+    state.execSession = session;
+    term.onData((data) => {
+      invoke("cmd_exec_input", { session, data }).catch(() => {});
+    });
+    term.focus();
+  } catch (e) {
+    term.write("\r\n\x1b[31mCould not open terminal: " + e + "\x1b[0m\r\n");
+  }
+}
+
+function closeTerminal() {
+  if (state.execSession) {
+    invoke("cmd_exec_close", { session: state.execSession }).catch(() => {});
+    state.execSession = null;
+  }
+  if (state.term) {
+    state.term.dispose();
+    state.term = null;
+    state.fitAddon = null;
+  }
+  els.terminal.classList.add("hidden");
+  els.termOpen.classList.remove("hidden");
+  els.termClose.classList.add("hidden");
+}
+
+async function startPortForward() {
+  const pod = state.selectedPod;
+  if (!pod) return;
+  const port = parseInt(els.pfPort.value, 10);
+  if (!port || port < 1 || port > 65535) {
+    els.pfStatus.textContent = "Enter a port between 1 and 65535.";
+    return;
+  }
+  els.pfStatus.textContent = "Starting…";
+  try {
+    const info = await invoke("cmd_portforward_start", {
+      namespace: pod.namespace,
+      name: pod.name,
+      port,
+    });
+    state.pfSession = info.session;
+    els.pfStatus.textContent = `Forwarding 127.0.0.1:${info.local_port} → ${pod.name}:${port}`;
+    els.pfStart.classList.add("hidden");
+    els.pfStop.classList.remove("hidden");
+  } catch (e) {
+    els.pfStatus.textContent = "Could not start port-forward: " + e;
+  }
+}
+
+function stopPortForward() {
+  if (state.pfSession) {
+    invoke("cmd_portforward_stop", { session: state.pfSession }).catch(() => {});
+    state.pfSession = null;
+  }
+  els.pfStatus.textContent = "";
+  els.pfStart.classList.remove("hidden");
+  els.pfStop.classList.add("hidden");
+}
+
+async function loadYaml() {
+  const pod = state.selectedPod;
+  if (!pod) return;
+  els.yamlEditor.value = "Loading…";
+  els.yamlStatus.textContent = "";
+  try {
+    els.yamlEditor.value = await invoke("cmd_get_pod_yaml", {
+      namespace: pod.namespace,
+      name: pod.name,
+    });
+  } catch (e) {
+    els.yamlEditor.value = "";
+    els.yamlStatus.textContent = "Could not load YAML: " + e;
+  }
+}
+
+async function saveYaml() {
+  const pod = state.selectedPod;
+  if (!pod) return;
+  els.yamlStatus.textContent = "Saving…";
+  try {
+    await invoke("cmd_apply_pod_yaml", {
+      namespace: pod.namespace,
+      name: pod.name,
+      yaml: els.yamlEditor.value,
+    });
+    els.yamlStatus.textContent = "Saved.";
+    await loadYaml();
+  } catch (e) {
+    els.yamlStatus.textContent = "Could not save YAML: " + e;
   }
 }
 
@@ -362,6 +563,22 @@ els.body.addEventListener("click", (e) => {
   openDetail(row.dataset.namespace, row.dataset.name);
 });
 els.detailClose.addEventListener("click", closeDetail);
+els.termOpen.addEventListener("click", openTerminal);
+els.termClose.addEventListener("click", closeTerminal);
+els.pfStart.addEventListener("click", startPortForward);
+els.pfStop.addEventListener("click", stopPortForward);
+els.yamlReload.addEventListener("click", loadYaml);
+els.yamlSave.addEventListener("click", saveYaml);
+window.addEventListener("resize", () => {
+  if (state.term && state.fitAddon && state.execSession) {
+    state.fitAddon.fit();
+    invoke("cmd_exec_resize", {
+      session: state.execSession,
+      cols: state.term.cols,
+      rows: state.term.rows,
+    }).catch(() => {});
+  }
+});
 els.logFollow.addEventListener("change", (e) => {
   state.logFollow = e.target.checked;
 });
@@ -373,6 +590,23 @@ els.logClear.addEventListener("click", () => {
   await listen("pod-log", (event) => appendLog(event.payload));
   await listen("pod-log-done", () => appendLog("[stream ended]", "muted"));
   await listen("pod-log-error", (event) => appendLog(event.payload, "error-text"));
+  // Output can arrive before cmd_exec_start resolves and state.execSession
+  // is set, so while a terminal is open without a session yet, accept
+  // output for it as well.
+  await listen("exec-output", (event) => {
+    const { session, data } = event.payload;
+    if (state.term && (session === state.execSession || !state.execSession)) {
+      state.term.write(data);
+    }
+  });
+  await listen("exec-closed", (event) => {
+    if (state.term && (event.payload === state.execSession || !state.execSession)) {
+      state.term.write("\r\n\x1b[90m[session closed]\x1b[0m\r\n");
+      // Keep state.execSession: a failure message can arrive just after
+      // the close, and the exec-output handler drops messages for a
+      // session it no longer knows.
+    }
+  });
   await loadContexts();
   await loadNamespaces();
   scheduleAutoRefresh();
