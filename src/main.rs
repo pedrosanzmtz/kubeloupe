@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use kubeloupe::{
     client,
     exec_in_pod, list_namespaces, list_nodes, list_pods, print_pod_logs, print_pod_yaml,
-    print_top_nodes, print_top_pods, run_port_forward, LogOptions,
+    print_top_nodes, print_top_pods, run_port_forward, watch_and_print, LogOptions,
 };
 
 #[derive(Parser)]
@@ -23,6 +23,15 @@ enum Commands {
     },
     /// List namespaces
     Namespaces,
+    /// Stream live changes to pods, nodes or namespaces (until Ctrl-C)
+    Watch {
+        /// What to watch: pods, nodes or namespaces
+        #[arg(default_value = "pods")]
+        resource: String,
+        /// Only watch pods in this namespace
+        #[arg(short, long)]
+        namespace: Option<String>,
+    },
     /// List nodes
     Nodes,
     /// Show the last lines of a pod's logs
@@ -96,6 +105,9 @@ async fn main() -> Result<()> {
     let client = client().await?;
     match cli.command {
         Commands::Pods { namespace } => list_pods(&client, namespace.as_deref()).await?,
+        Commands::Watch { resource, namespace } => {
+            watch_and_print(&client, &resource, namespace.as_deref()).await?
+        }
         Commands::Namespaces => list_namespaces(&client).await?,
         Commands::Nodes => list_nodes(&client).await?,
         Commands::Logs { name, namespace, tail, container, previous, follow } => {

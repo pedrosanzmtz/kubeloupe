@@ -7,7 +7,7 @@ use kubeloupe::{
     client_for_context,
     apply_pod_yaml, exec_pod, get_namespaces, get_node_metrics, get_nodes, get_overview,
     get_pod_details, get_pod_metrics, get_pod_yaml, get_pods, list_contexts, serve_port_forward,
-    batch_lines, stream_pod_logs, ContextInfo, LogOptions, NamespaceInfo, NodeInfo, NodeUsage, Overview, PodDetail, PodInfo,
+    batch_lines, stream_pod_logs, watch, ContextInfo, LogOptions, NamespaceInfo, NodeInfo, NodeUsage, Overview, PodDetail, PodInfo,
     PodUsage,
 };
 use serde::Serialize;
@@ -50,6 +50,8 @@ struct AppState {
     exec_sessions: Mutex<HashMap<String, ExecSession>>,
     /// Active port-forwards, by session id.
     forwards: Mutex<HashMap<String, ForwardSession>>,
+    /// Running resource watchers, by watch id.
+    watches: Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>,
 }
 
 fn selected_context(state: &State<'_, AppState>) -> Option<String> {
@@ -80,6 +82,13 @@ fn stop_all_exec(state: &State<'_, AppState>) {
     let mut sessions = state.exec_sessions.lock().unwrap();
     for (_, session) in sessions.drain() {
         session.task.abort();
+    }
+}
+
+fn stop_all_watches(state: &State<'_, AppState>) {
+    let mut watches = state.watches.lock().unwrap();
+    for (_, task) in watches.drain() {
+        task.abort();
     }
 }
 
@@ -246,6 +255,80 @@ async fn cmd_get_metrics(state: State<'_, AppState>) -> Result<MetricsSnapshot, 
     })
 }
 
+/// Payload of the `watch-batch` event.
+#[derive(Debug, Clone, Serialize)]
+struct WatchBatchEvent<T> {
+    id: String,
+    #[serde(flatten)]
+    batch: watch::Batch<T>,
+}
+
+/// Payload of the `watch-state` event.
+#[derive(Debug, Clone, Serialize)]
+struct WatchStateEvent {
+    id: String,
+    #[serde(flatten)]
+    state: watch::WatchState,
+}
+
+/// Forward a watch to the webview: state changes as `watch-state`, rows as
+/// coalesced `watch-batch` events.
+async fn pump_watch<T, S>(app: AppHandle, id: String, updates: S)
+where
+    T: watch::Keyed + Clone + Serialize + Send + 'static,
+    S: futures::Stream<Item = watch::Update<T>> + Unpin,
+{
+    watch::run_batched(updates, watch::DEFAULT_FLUSH, |out| match out {
+        watch::Output::Batch(batch) => {
+            let _ = app.emit("watch-batch", WatchBatchEvent { id: id.clone(), batch });
+        }
+        watch::Output::State(state) => {
+            let _ = app.emit("watch-state", WatchStateEvent { id: id.clone(), state });
+        }
+    })
+    .await;
+}
+
+/// Start watching `kind` ("pods", "nodes" or "namespaces"). Returns the
+/// watch id carried by the `watch-batch` / `watch-state` events. The first
+/// batch is a full snapshot; later ones are incremental.
+#[tauri::command]
+async fn cmd_watch_start(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    kind: String,
+    namespace: Option<String>,
+) -> Result<String, String> {
+    let client = client(&state).await?;
+    let id = next_session("watch");
+    let task_id = id.clone();
+    let task = match kind.as_str() {
+        "pods" => {
+            let (_store, updates) = watch::watch_pods(&client, namespace.as_deref());
+            tauri::async_runtime::spawn(pump_watch(app, task_id, updates))
+        }
+        "nodes" => {
+            let (_store, updates) = watch::watch_nodes(&client);
+            tauri::async_runtime::spawn(pump_watch(app, task_id, updates))
+        }
+        "namespaces" => {
+            let (_store, updates) = watch::watch_namespaces(&client);
+            tauri::async_runtime::spawn(pump_watch(app, task_id, updates))
+        }
+        other => return Err(format!("cannot watch {other}")),
+    };
+    state.watches.lock().unwrap().insert(id.clone(), task);
+    Ok(id)
+}
+
+#[tauri::command]
+async fn cmd_watch_stop(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    if let Some(task) = state.watches.lock().unwrap().remove(&id) {
+        task.abort();
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn cmd_list_contexts(state: State<'_, AppState>) -> Result<Vec<ContextInfo>, String> {
     let mut contexts = list_contexts().await.map_err(|e| e.to_string())?;
@@ -265,6 +348,7 @@ async fn cmd_set_context(
     stop_log_stream(&state);
     stop_all_exec(&state);
     stop_all_forwards(&state);
+    stop_all_watches(&state);
     *state.context.lock().unwrap() = name;
     *state.client.lock().await = None;
     Ok(())
@@ -515,6 +599,7 @@ fn main() {
             log_task: Mutex::new(None),
             exec_sessions: Mutex::new(HashMap::new()),
             forwards: Mutex::new(HashMap::new()),
+            watches: Mutex::new(HashMap::new()),
         })
         .invoke_handler(tauri::generate_handler![
             cmd_list_pods,
@@ -526,6 +611,8 @@ fn main() {
             cmd_save_logs,
             cmd_get_overview,
             cmd_get_metrics,
+            cmd_watch_start,
+            cmd_watch_stop,
             cmd_list_contexts,
             cmd_set_context,
             cmd_exec_start,
