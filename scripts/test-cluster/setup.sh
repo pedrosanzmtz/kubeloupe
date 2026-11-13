@@ -1,80 +1,120 @@
 #!/usr/bin/env bash
-# Sets up the kubeloupe test clusters with kwok (Kubernetes WithOut Kubelet):
-# real API servers (kube-apiserver + etcd) with simulated nodes and pods.
-# No Docker, no VM, no cgroup support needed — that is why kwok, and not
-# kind/k3s/minikube, is the test route for this repo.
+# Sets up the kubeloupe test cluster with kind (Kubernetes IN Docker): real
+# nodes running real containers, so logs, exec, port-forwarding and the
+# metrics API all work.
 #
 # Creates:
-#   kubeloupe-test     — 2 nodes + the demo workload (demo.yaml)
-#   kubeloupe-staging  — 1 node, empty (for testing the context switcher)
-# Merges both contexts into ~/.kube/config and leaves kubeloupe-test current.
+#   kubeloupe-test     — control-plane + 1 worker, metrics-server and the
+#                        demo workload (demo.yaml)
+#   kubeloupe-staging  — single node, empty, only with --staging (a second
+#                        cluster for testing the context switcher)
+# kind merges the contexts into ~/.kube/config; kind-kubeloupe-test is left
+# current.
 #
-# Usage: bash scripts/test-cluster/setup.sh
-# Tear down: kwokctl delete cluster --name kubeloupe-test
-#            kwokctl delete cluster --name kubeloupe-staging
+# Requires: Docker (your user able to run `docker` without sudo).
+# Usage:     bash scripts/test-cluster/setup.sh [--staging]
+# Tear down: kind delete cluster --name kubeloupe-test
+#            kind delete cluster --name kubeloupe-staging
 set -euo pipefail
 
-KWOK_VERSION="${KWOK_VERSION:-v0.8.0}"
+KIND_VERSION="${KIND_VERSION:-v0.33.0}"
+METRICS_SERVER_VERSION="${METRICS_SERVER_VERSION:-v0.9.1}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# kubectl: prefer the one on PATH, else the copy kwokctl downloaded.
-if command -v kubectl >/dev/null 2>&1; then
-  KUBECTL="$(command -v kubectl)"
-else
-  KUBECTL="$(find "$HOME/.kwok/cache" -name kubectl -type f 2>/dev/null | head -1)"
-fi
-
-# Install into ~/.local/bin (kept in $HOME, so it survives VM replacements
-# on ephemeral machines) and make sure it is on PATH for this run.
-export PATH="$HOME/.local/bin:$PATH"
-if ! command -v kwokctl >/dev/null 2>&1; then
-  OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
-  ARCH="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
-  echo "Installing kwokctl ${KWOK_VERSION} (${OS}/${ARCH}) to ~/.local/bin..."
-  mkdir -p "$HOME/.local/bin"
-  curl -sfL "https://github.com/kubernetes-sigs/kwok/releases/download/${KWOK_VERSION}/kwokctl-${OS}-${ARCH}" -o "$HOME/.local/bin/kwokctl"
-  curl -sfL "https://github.com/kubernetes-sigs/kwok/releases/download/${KWOK_VERSION}/kwok-${OS}-${ARCH}" -o "$HOME/.local/bin/kwok"
-  chmod +x "$HOME/.local/bin/kwokctl" "$HOME/.local/bin/kwok"
-fi
-
-# 2. Create the clusters (skip ones that already exist).
-for cluster in kubeloupe-test kubeloupe-staging; do
-  if kwokctl get clusters 2>/dev/null | grep -qx "$cluster"; then
-    echo "Cluster $cluster already exists, skipping create."
-  else
-    kwokctl create cluster --name "$cluster"
-  fi
+WITH_STAGING=0
+for arg in "$@"; do
+  case "$arg" in
+    --staging) WITH_STAGING=1 ;;
+    *) echo "unknown argument: $arg" >&2; exit 2 ;;
+  esac
 done
-kwokctl scale node --replicas 2 --name kubeloupe-test
-kwokctl scale node --replicas 1 --name kubeloupe-staging
 
-# kubectl is downloaded by kwokctl during cluster creation; find it now
-# if it was not on PATH before.
-if [ -z "$KUBECTL" ]; then
-  KUBECTL="$(find "$HOME/.kwok/cache" -name kubectl -type f 2>/dev/null | head -1)"
+# Tools go into ~/.local/bin; make sure it is on PATH for this run.
+export PATH="$HOME/.local/bin:$PATH"
+OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+ARCH="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
+mkdir -p "$HOME/.local/bin"
+
+# 1. Docker must be installed and usable without sudo.
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Docker is not installed. On Ubuntu:" >&2
+  echo "  sudo apt-get install -y docker.io && sudo usermod -aG docker \$USER" >&2
+  echo "then log out and back in (or run: newgrp docker)." >&2
+  exit 1
 fi
-[ -n "$KUBECTL" ] || { echo "kubectl not found (expected in ~/.kwok/cache)" >&2; exit 1; }
+if ! docker info >/dev/null 2>&1; then
+  echo "Cannot talk to the Docker daemon. Is it running, and is your user in" >&2
+  echo "the docker group? (sudo usermod -aG docker \$USER, then log in again)" >&2
+  exit 1
+fi
 
-# 3. Demo workload on the test cluster.
-"$KUBECTL" --kubeconfig="$HOME/.kwok/clusters/kubeloupe-test/kubeconfig.yaml" \
-  apply -f "$SCRIPT_DIR/demo.yaml"
-sleep 5
-# Seed a Failed pod: kwok simulates pods to Running, so patch the status
-# of `crashed` to Failed with a terminated container and 3 restarts.
-"$KUBECTL" --kubeconfig="$HOME/.kwok/clusters/kubeloupe-test/kubeconfig.yaml" \
-  patch pod crashed -n demo --subresource=status --type=merge \
-  -p '{"status":{"phase":"Failed","containerStatuses":[{"name":"app","ready":false,"restartCount":3,"state":{"terminated":{"reason":"Error","exitCode":1}}}]}}'
+# 2. kind and kubectl.
+if ! command -v kind >/dev/null 2>&1; then
+  echo "Installing kind ${KIND_VERSION} to ~/.local/bin..."
+  curl -sfLo "$HOME/.local/bin/kind" \
+    "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-${OS}-${ARCH}"
+  chmod +x "$HOME/.local/bin/kind"
+fi
+if ! command -v kubectl >/dev/null 2>&1; then
+  KUBECTL_VERSION="$(curl -sfL https://dl.k8s.io/release/stable.txt)"
+  echo "Installing kubectl ${KUBECTL_VERSION} to ~/.local/bin..."
+  curl -sfLo "$HOME/.local/bin/kubectl" \
+    "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/${OS}/${ARCH}/kubectl"
+  chmod +x "$HOME/.local/bin/kubectl"
+fi
 
-# 4. Merge both contexts into ~/.kube/config, test cluster current.
-mkdir -p "$HOME/.kube"
-kwokctl get kubeconfig --name kubeloupe-test > "$HOME/.kube/config"
-KUBECONFIG="$HOME/.kube/config:$HOME/.kwok/clusters/kubeloupe-staging/kubeconfig.yaml" \
-  "$KUBECTL" config view --flatten > /tmp/kubeloupe-kubeconfig.yaml
-cp /tmp/kubeloupe-kubeconfig.yaml "$HOME/.kube/config"
-chmod 600 "$HOME/.kube/config"
-"$KUBECTL" --kubeconfig="$HOME/.kube/config" config use-context kwok-kubeloupe-test
+# 3. Clusters (skip ones that already exist).
+create_cluster() {
+  local name="$1" config="$2"
+  if kind get clusters 2>/dev/null | grep -qx "$name"; then
+    echo "Cluster $name already exists, skipping create."
+  else
+    kind create cluster --name "$name" --config - <<<"$config"
+  fi
+}
+
+create_cluster kubeloupe-test "$(cat <<'EOF'
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+  - role: worker
+EOF
+)"
+if [ "$WITH_STAGING" = 1 ]; then
+  create_cluster kubeloupe-staging "$(cat <<'EOF'
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+EOF
+)"
+fi
+
+KCTX=(--context kind-kubeloupe-test)
+
+# 4. metrics-server. kind's kubelets use self-signed serving certs, so
+# metrics-server needs --kubelet-insecure-tls (fine for a local test cluster).
+kubectl "${KCTX[@]}" apply -f \
+  "https://github.com/kubernetes-sigs/metrics-server/releases/download/${METRICS_SERVER_VERSION}/components.yaml"
+if ! kubectl "${KCTX[@]}" -n kube-system get deploy metrics-server \
+     -o jsonpath='{.spec.template.spec.containers[0].args}' | grep -q kubelet-insecure-tls; then
+  kubectl "${KCTX[@]}" -n kube-system patch deploy metrics-server --type=json \
+    -p '[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
+fi
+
+# 5. Demo workload.
+kubectl "${KCTX[@]}" apply -f "$SCRIPT_DIR/demo.yaml"
+
+echo "Waiting for metrics-server and the demo workload..."
+kubectl "${KCTX[@]}" -n kube-system rollout status deploy/metrics-server --timeout=180s
+kubectl "${KCTX[@]}" -n demo rollout status deploy/web --timeout=180s
+kubectl "${KCTX[@]}" -n demo rollout status deploy/logger --timeout=180s
+
+kubectl config use-context kind-kubeloupe-test
 
 echo
-echo "Test clusters ready:"
-"$KUBECTL" --kubeconfig="$HOME/.kube/config" config get-contexts
+echo "Test cluster ready:"
+kubectl config get-contexts
 echo "Run the app with: cargo run -p kubeloupe-desktop"
+echo "(Usage columns fill in about a minute after metrics-server starts.)"

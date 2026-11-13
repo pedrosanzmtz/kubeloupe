@@ -64,39 +64,37 @@ cargo run -- port-forward <pod> 80 -n <namespace>
 
 ## Test cluster
 
-`bash scripts/test-cluster/setup.sh` creates two local test clusters with
-[kwok](https://kwok.sigs.k8s.io/) (Kubernetes WithOut Kubelet): real API
-servers (kube-apiserver + etcd, Kubernetes v1.36) with simulated nodes and
-pods. No Docker, no VM, no cgroup support needed — that is why kwok, and not
-kind/k3s/minikube, is the test route here.
+`bash scripts/test-cluster/setup.sh` creates a local test cluster with
+[kind](https://kind.sigs.k8s.io/) (Kubernetes IN Docker): real nodes running
+real containers, so everything in the app — logs, pod exec,
+port-forwarding and the CPU/memory columns — can be tested end to end.
+It needs Docker, usable by your user without `sudo`
+(`sudo apt-get install -y docker.io && sudo usermod -aG docker $USER`,
+then log in again). The script installs `kind` and `kubectl` into
+`~/.local/bin` if they are missing.
 
-It creates:
+It creates `kubeloupe-test` — a control-plane node and a worker, with:
 
-- `kubeloupe-test` — 2 nodes and the demo workload
-  (`scripts/test-cluster/demo.yaml`): nginx and logger deployments, a
-  Pending pod (`hungry`, impossible resource request) and a Failed pod
-  (`crashed`)
-- `kubeloupe-staging` — 1 node, empty, so the context switcher has a second
-  cluster to switch to
+- metrics-server (patched with `--kubelet-insecure-tls`, which kind's
+  self-signed kubelet certs need), so the usage columns and `kubeloupe top`
+  work; the numbers appear about a minute after it starts
+- the demo workload (`scripts/test-cluster/demo.yaml`): nginx and logger
+  deployments (the logger writes a line every 2s, handy for live logs), a
+  Pending pod (`hungry`, impossible resource request, in `default`) and a
+  crash-looping pod (`crashed`)
 
-It merges both contexts into `~/.kube/config` and leaves `kubeloupe-test`
-current, so `cargo run -p kubeloupe-desktop` opens against the test cluster.
+Pass `--staging` to also create `kubeloupe-staging` — a single empty node,
+so the context switcher has a second cluster to switch to. Each kind
+cluster costs roughly 500 MB–1 GB of RAM, which is why it is opt-in.
 
-One honest limitation: kwok simulates pods, there is no kubelet and no
-metrics-server, so **pod logs, pod exec, and port-forwarding fail** on the
-test clusters (the app shows the real error, e.g. "no exec found for
-container"), and the **CPU/memory columns show "—"**. Those need a cluster
-with real containers (kind, k3s, or a real cluster) and, for usage,
-metrics-server installed. Everything else — lists, details, events,
-overview, context switching, YAML editing — works against the real API
-server. The usage columns are verified against a mock API server that
-serves the metrics.k8s.io API (see `kubeloupe top` against it).
+kind adds the contexts (`kind-kubeloupe-test`, `kind-kubeloupe-staging`)
+to `~/.kube/config` and the script leaves `kind-kubeloupe-test` current, so
+`cargo run -p kubeloupe-desktop` opens against the test cluster.
 
-Stop the clusters with `kwokctl delete cluster --name kubeloupe-test` (and
-`kubeloupe-staging`); re-run the script to recreate them. If the machine
-restarts, the cluster processes stop but their state persists under
-`~/.kwok` — bring them back with `kwokctl start cluster --name
-kubeloupe-test` (and `kubeloupe-staging`); the kubeconfig stays valid.
+Delete the clusters with `kind delete cluster --name kubeloupe-test` (and
+`kubeloupe-staging`); re-run the script to recreate them. The node
+containers normally restart with Docker after a reboot; if a cluster comes
+back broken, delete it and re-run the script.
 
 ## Roadmap
 
