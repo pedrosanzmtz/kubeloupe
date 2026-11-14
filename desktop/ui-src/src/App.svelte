@@ -17,6 +17,11 @@
   import PortForwards from "./lib/components/PortForwards.svelte";
   import { PORT_FORWARDS_VIEW } from "./lib/forwards";
   import Dock from "./lib/components/Dock.svelte";
+  import HelmView from "./lib/components/helm/HelmView.svelte";
+  import HelmDetail from "./lib/components/helm/HelmDetail.svelte";
+  import HelmConfirm from "./lib/components/helm/HelmConfirm.svelte";
+  import { helm } from "./lib/stores/helm.svelte";
+  import { HELM_VIEW } from "./lib/helm";
   import { dock } from "./lib/stores/dock.svelte";
   import { isPod } from "./lib/columns";
   import {
@@ -79,6 +84,8 @@
       <!-- Restoring the remembered context and namespaces. -->
     {:else if app.view === "overview"}
       <Overview />
+    {:else if app.view === HELM_VIEW}
+      <HelmView />
     {:else if app.view === PORT_FORWARDS_VIEW}
       <PortForwards />
     {:else if kind}
@@ -98,10 +105,16 @@
       {/if}
     {/key}
   {/if}
+  {#if app.view === HELM_VIEW && helm.selected}
+    {#key `${helm.selected.namespace}/${helm.selected.name}`}
+      <HelmDetail target={helm.selected} />
+    {/key}
+  {/if}
 </div>
 <Dock />
 <Footer />
 <ActionDialog />
+<HelmConfirm />
 {#if createUi.open}
   <CreateDialog />
 {/if}

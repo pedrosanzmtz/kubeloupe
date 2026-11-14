@@ -46,6 +46,7 @@ import type {
 } from "../lib/bindings";
 import { defaultCluster, detail, makeRow, NO_POD } from "./fixtures/cluster";
 import { NO_RELATED } from "./fixtures/related";
+import { helmGet, helmList, helmRollback, helmUninstall } from "./fixtures/helm";
 import type { FakeCluster } from "./fixtures/cluster";
 
 type Commands = typeof commands;
@@ -479,6 +480,26 @@ export function installFakeBackend(cluster: FakeCluster = defaultCluster()): Fak
     },
     cmdCancelDrain: () => null,
 
+    cmdHelmList: (namespaces) => helmList(cluster.helm, namespaces),
+    cmdHelmCharts: (keys) =>
+      keys.map((k) => {
+        try {
+          const r = helmGet(cluster.helm, k.namespace, k.name, k.revision, false);
+          const { chart, chart_version, app_version } = r;
+          return { ...k, chart, chart_version, app_version, error: "" };
+        } catch (e) {
+          return { ...k, chart: "", chart_version: "", app_version: "", error: String(e) };
+        }
+      }),
+    cmdHelmGet: (namespace, name, revision, reveal) => helmGet(cluster.helm, namespace, name, revision, reveal),
+    cmdHelmVersion: () => {
+      if (!cluster.helm.version) {
+        throw "helm is not installed or not on PATH. Install it (https://helm.sh/docs/intro/install/) to roll back or uninstall releases.";
+      }
+      return cluster.helm.version;
+    },
+    cmdHelmRollback: (namespace, name, revision) => helmRollback(cluster.helm, namespace, name, revision),
+    cmdHelmUninstall: (namespace, name) => helmUninstall(cluster.helm, namespace, name),
     cmdGetSettings: () => copy(cluster.settings),
     cmdUpdateSettings: (patch) => {
       // The app sends whole values (`SettingsPatch`), like the backend expects.

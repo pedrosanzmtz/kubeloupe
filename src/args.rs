@@ -3,6 +3,7 @@
 
 use clap::{Parser, Subcommand};
 use clap_complete::Shell;
+use kubeloupe::helm::HelmSection;
 use kubeloupe::OutputFormat;
 use std::path::PathBuf;
 
@@ -223,11 +224,45 @@ pub enum Commands {
         #[arg(last = true, required = true)]
         command: Vec<String>,
     },
+    /// Helm releases, read from the cluster (no helm binary needed)
+    Helm {
+        #[command(subcommand)]
+        command: HelmCommand,
+    },
     /// Print a shell completion script, e.g.
     /// `kubeloupe completions bash > ~/.local/share/bash-completion/completions/kubeloupe`
     Completions {
         #[arg(value_enum)]
         shell: Shell,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum HelmCommand {
+    /// List releases with their chart, revision and status
+    #[command(alias = "ls")]
+    List {
+        /// Only this namespace (default: all namespaces)
+        #[arg(short, long)]
+        namespace: Option<String>,
+    },
+    /// Show one release: its status, values, manifest, notes or history
+    Get {
+        release: String,
+        #[arg(value_enum, default_value_t = HelmSection::All)]
+        section: HelmSection,
+        /// Namespace (default: the context's namespace)
+        #[arg(short, long)]
+        namespace: Option<String>,
+        /// Revision to show (default: the newest)
+        #[arg(long)]
+        revision: Option<u32>,
+        /// Values: include the chart defaults
+        #[arg(long)]
+        all: bool,
+        /// Manifest: show Secret values instead of a placeholder
+        #[arg(long)]
+        reveal: bool,
     },
 }
 
@@ -364,6 +399,28 @@ mod tests {
             (resource.as_str(), namespace.as_deref()),
             ("pods", Some("demo"))
         );
+        let Commands::Helm {
+            command:
+                HelmCommand::Get {
+                    release,
+                    section,
+                    revision,
+                    ..
+                },
+        } = parse(&["helm", "get", "web", "manifest", "--revision", "2"]).command
+        else {
+            panic!("not helm get");
+        };
+        assert_eq!(
+            (release.as_str(), section, revision),
+            ("web", HelmSection::Manifest, Some(2))
+        );
+        assert!(matches!(
+            parse(&["helm", "ls", "-n", "x"]).command,
+            Commands::Helm {
+                command: HelmCommand::List { .. }
+            }
+        ));
         assert!(matches!(
             parse(&["completions", "zsh"]).command,
             Commands::Completions { shell: Shell::Zsh }
