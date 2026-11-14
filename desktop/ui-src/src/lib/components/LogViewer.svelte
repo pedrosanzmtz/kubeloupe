@@ -10,6 +10,8 @@
   import { LogBuffer, LOG_BUFFER_MAX, linePrefix, logMatches, podColor, splitHighlights } from "../logs";
   import type { TaggedText, WorkloadRef } from "../logs";
   import type { PodRef } from "../stores/detail.svelte";
+  import { settings } from "../stores/settings.svelte";
+  import { TAIL_OPTIONS } from "../settings";
 
   interface Props {
     /** Single-pod mode: the pod whose logs to show. */
@@ -43,10 +45,12 @@
   // Log options.
   let container = $state("");
   let previous = $state(false);
-  let tail = $state("200");
+  // Start from the defaults on the Settings page.
+  const defaults = settings.current.logs;
+  let tail = $state(TAIL_OPTIONS.includes(defaults.tail) ? defaults.tail : "200");
   let since = $state("all");
-  let timestamps = $state(false);
-  let wrap = $state(false);
+  let timestamps = $state(defaults.timestamps);
+  let wrap = $state(defaults.wrap);
   let follow = $state(true);
   let filterInput = $state("");
   let filter = $state("");

@@ -19,6 +19,8 @@ import type {
   ServicePortInfo,
   StateInfo,
 } from "../../lib/bindings";
+import { defaultSettings } from "../../lib/settings";
+import type { Settings } from "../../lib/settings";
 import { DISCOVERED } from "./discover";
 import { relatedFixtures } from "./related";
 
@@ -64,6 +66,11 @@ export interface FakeCluster {
   servicePorts: Record<string, ServicePortInfo[]>;
   overview: Overview_Serialize;
   metrics: MetricsSnapshot;
+  /**
+   * What `cmd_get_settings` returns. The fake keeps changes in
+   * sessionStorage, so they survive a page reload (an app restart).
+   */
+  settings: Settings;
 }
 
 /** Unix seconds, a fixed distance in the past so ages are stable. */
@@ -340,6 +347,7 @@ export function defaultCluster(): FakeCluster {
         },
       ],
     },
+    settings: defaultSettings(),
   };
 }
 
