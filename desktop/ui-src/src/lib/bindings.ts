@@ -59,7 +59,7 @@ export const commands = {
 	cmdGetResourceDetail: (resource: ResourceRef, namespace: string, name: string, options?: InvokeOptions) => __TAURI_INVOKE<ResourceDetail>("cmd_get_resource_detail", { resource, namespace, name }, options),
 	/**  An object as YAML. Secret values stay hidden unless `reveal` is set. */
 	cmdGetResourceYaml: (resource: ResourceRef, namespace: string, name: string, reveal: boolean, options?: InvokeOptions) => __TAURI_INVOKE<string>("cmd_get_resource_yaml", { resource, namespace, name, reveal }, options),
-	cmdApplyResourceYaml: (resource: ResourceRef, namespace: string, name: string, yaml: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_apply_resource_yaml", { resource, namespace, name, yaml }, options),
+	cmdApplyResourceYaml: (resource: ResourceRef, namespace: string, name: string, yaml: string, options?: InvokeOptions) => __TAURI_INVOKE<FieldTakeover[]>("cmd_apply_resource_yaml", { resource, namespace, name, yaml }, options),
 	cmdDeleteResource: (resource: ResourceRef, namespace: string, name: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_delete_resource", { resource, namespace, name }, options),
 };
 
@@ -146,6 +146,14 @@ export type ExecOutput = {
 	session: string,
 	stream: string,
 	data: string,
+};
+
+/**  Fields an apply took over from another field manager. */
+export type FieldTakeover = {
+	/**  The manager that owned the fields (e.g. "kubectl-create", "helm"). */
+	manager: string,
+	/**  Field paths, as the API server reports them (e.g. ".spec.replicas"). */
+	fields: string[],
 };
 
 /**  A container (regular or init) whose logs can be read. */
