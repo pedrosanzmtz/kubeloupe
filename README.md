@@ -40,6 +40,12 @@ Svelte) and a CLI, both built on the same Rust core.
   scale, rollout restart, cordon/uncordon, drain (with progress, respecting
   PodDisruptionBudgets), trigger/suspend/resume a CronJob, delete and force
   delete. Destructive ones ask for confirmation and list the exact objects.
+- **Keyboard first**: a command palette (Ctrl+K / Cmd+K) jumps to any kind
+  (`deploy`, `svc`, `cm` work), namespace, context or object and runs
+  actions (`>`); `ns ` and `ctx ` narrow it to namespaces or contexts.
+  Arrow keys or j/k move through the table, Enter opens, Space selects,
+  Delete deletes, Shift+F10 opens the row menu, `/` focuses the filter and
+  `?` lists every shortcut.
 - **Multi-cluster**: switch between your kubeconfig contexts from the header.
 
 ## CLI

@@ -156,6 +156,7 @@ pub struct ResourceKind {
     /// Defined by a CustomResourceDefinition.
     pub crd: bool,
     pub verbs: Vec<String>,
+    /// Short names from discovery plus kubectl's aliases (`deploy`, `svc`).
     pub short_names: Vec<String>,
     pub columns: Vec<ColumnDef>,
     /// What can be done to objects of this kind ([`crate::actions::actions_for`]).

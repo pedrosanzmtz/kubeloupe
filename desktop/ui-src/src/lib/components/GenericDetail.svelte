@@ -9,6 +9,7 @@
   import LogViewer from "./LogViewer.svelte";
   import { WORKLOAD_KINDS } from "../logs";
   import { closeDetail } from "../stores/detail.svelte";
+  import { registerTabs } from "../stores/keyboard.svelte";
   import type { Target } from "../stores/detail.svelte";
   import { LiveDetail } from "../stores/live-detail.svelte";
 
@@ -34,6 +35,8 @@
   let tab = $state("overview");
 
   onMount(() => void live.start());
+  // Ctrl/Cmd+1…9 picks a tab.
+  onMount(() => registerTabs({ count: () => tabs.length, select: (i) => (tab = tabs[i].id) }));
   onDestroy(() => live.stop());
 
   const title = $derived(target.namespace ? `${target.namespace}/${target.name}` : target.name);
