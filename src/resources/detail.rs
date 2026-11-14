@@ -1,13 +1,15 @@
-//! The detail panel for any kind: metadata, owners, conditions, events.
+//! The detail panel for any kind: metadata, owners, conditions, events,
+//! and for pods the pod section ([`super::pod_detail`]).
 
 use super::columns::age_text;
 use super::jsonpath::{array_at, first_of, path_str};
 use super::ops::{is_secret, LAST_APPLIED};
+use super::pod_detail::pod_extras;
 use super::*;
 use crate::{age_of_secs, created_secs};
 use anyhow::Result;
-use k8s_openapi::api::core::v1::Event;
-use kube::api::{Api, ListParams};
+use k8s_openapi::api::core::v1::{Event, Pod};
+use kube::api::{Api, DynamicObject, ListParams};
 use kube::Client;
 use serde_json::Value;
 
@@ -19,7 +21,19 @@ pub async fn get_resource_detail(
     name: &str,
 ) -> Result<ResourceDetail> {
     let obj = get_resource(client, r, namespace, name).await?;
-    let value = serde_json::to_value(&obj)?;
+    let uid = obj.metadata.uid.clone().unwrap_or_default();
+    let events = related_events(client, namespace, &uid).await;
+    detail_of(r, &obj, events)
+}
+
+/// The detail of `obj` (of kind `r`) with its related `events` already
+/// summarized ([`summarize_events`]).
+pub fn detail_of(
+    r: &ResourceRef,
+    obj: &DynamicObject,
+    events: Vec<RelatedEvent>,
+) -> Result<ResourceDetail> {
+    let mut value = serde_json::to_value(obj)?;
     let meta = &obj.metadata;
     let uid = meta.uid.clone().unwrap_or_default();
     let created = created_secs(&meta.creation_timestamp);
@@ -79,7 +93,14 @@ pub async fn get_resource_detail(
     } else {
         Vec::new()
     };
-    let events = related_events(client, namespace, &uid).await;
+    let pod = if r.is("", "Pod") {
+        // The typed pod needs its identity, which a list item may lack.
+        value["apiVersion"] = "v1".into();
+        value["kind"] = "Pod".into();
+        pod_extras(&serde_json::from_value::<Pod>(value)?)
+    } else {
+        PodExtras::default()
+    };
     Ok(ResourceDetail {
         name: meta.name.clone().unwrap_or_default(),
         namespace: meta.namespace.clone().unwrap_or_default(),
@@ -95,6 +116,7 @@ pub async fn get_resource_detail(
         conditions,
         secret_keys,
         events,
+        pod,
     })
 }
 
@@ -114,8 +136,12 @@ async fn related_events(client: &Client, namespace: &str, uid: &str) -> Vec<Rela
     let Ok(list) = api.list(&lp).await else {
         return Vec::new();
     };
-    let mut events: Vec<(i64, RelatedEvent)> = list
-        .items
+    summarize_events(list.items)
+}
+
+/// Events for the panel, newest first, at most 50.
+pub fn summarize_events(items: impl IntoIterator<Item = Event>) -> Vec<RelatedEvent> {
+    let mut events: Vec<(i64, RelatedEvent)> = items
         .into_iter()
         .map(|e| {
             let ts = e

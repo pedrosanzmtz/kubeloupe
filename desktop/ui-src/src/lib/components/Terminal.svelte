@@ -38,6 +38,9 @@
     t.loadAddon(f);
     t.open(host);
     f.fit();
+    // The pod panel is long: bring the terminal into view (xterm also stops
+    // rendering while it is off screen).
+    host.scrollIntoView?.({ block: "nearest" });
     term = t;
     fit = f;
 

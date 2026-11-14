@@ -1,24 +1,11 @@
-//! Pod and resource details, YAML get / apply, delete.
+//! Resource details, YAML get / apply, delete.
 
 use crate::state::{client, AppState};
 use kubeloupe::actions::{self};
 use kubeloupe::resources::{self, ResourceDetail, ResourceRef};
-use kubeloupe::{get_pod_details, PodDetail};
 use tauri::State;
 
-#[tauri::command]
-#[specta::specta]
-pub(crate) async fn cmd_get_pod_details(
-    state: State<'_, AppState>,
-    namespace: String,
-    name: String,
-) -> Result<PodDetail, String> {
-    let client = client(&state).await?;
-    get_pod_details(&client, &namespace, &name)
-        .await
-        .map_err(|e| e.to_string())
-}
-
+/// Detail of any object; pods include their `pod` section.
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn cmd_get_resource_detail(

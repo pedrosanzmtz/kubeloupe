@@ -9,9 +9,12 @@ import type {
   MetricsSnapshot,
   NamespaceInfo,
   Overview_Serialize,
-  PodDetail,
+  ContainerDetail,
+  PodExtras,
+  ResourceDetail,
   ResourceKind,
   ResourceRow,
+  StateInfo,
 } from "../../lib/bindings";
 import { DISCOVERED } from "./discover";
 
@@ -32,8 +35,8 @@ export interface FakeCluster {
   deniedClusterWide: string[];
   /** Rows by kind id; watches serve these. */
   rows: Record<string, ResourceRow[]>;
-  /** Pod details by `namespace/name`. */
-  pods: Record<string, PodDetail>;
+  /** Details by `kindId|rowKey`; other objects get a generated one. */
+  details: Record<string, ResourceDetail>;
   /** YAML by `kindId|rowKey`; missing objects get a generated manifest. */
   yaml: Record<string, string>;
   /** Secret YAML with values, by `kindId|rowKey` (`reveal: true`). */
@@ -51,6 +54,72 @@ export interface FakeCluster {
 
 /** Unix seconds, a fixed distance in the past so ages are stable. */
 const ago = (secs: number) => Math.floor(Date.now() / 1000) - secs;
+
+/** The `pod` section of a detail that is not a pod. */
+export const NO_POD: PodExtras = {
+  phase: "",
+  reason: "",
+  message: "",
+  node: "",
+  pod_ips: [],
+  host_ip: "",
+  qos_class: "",
+  priority_class: "",
+  service_account: "",
+  containers: [],
+  log_containers: [],
+};
+
+export const NO_STATE: StateInfo = { state: "", reason: "", message: "", exit_code: 0, since: "" };
+
+/** A container with nothing set but its name and image. */
+export function container(name: string, image: string, more: Partial<ContainerDetail> = {}): ContainerDetail {
+  return {
+    name,
+    kind: "regular",
+    image,
+    image_id: `docker.io/library/${image}@sha256:0123`,
+    state: { ...NO_STATE, state: "running", since: "1h" },
+    last_state: NO_STATE,
+    ready: true,
+    restarts: 0,
+    requests: {},
+    limits: {},
+    ports: [],
+    probes: [],
+    mounts: [],
+    env: [],
+    ...more,
+  };
+}
+
+/** A detail for `kind`/`namespace`/`name` with empty metadata. */
+export function detail(
+  kind: ResourceKind,
+  namespace: string,
+  name: string,
+  more: Partial<ResourceDetail> = {},
+): ResourceDetail {
+  const r = kind.resource;
+  return {
+    name,
+    namespace,
+    uid: `uid-${namespace}-${name}`,
+    api_version: r.group ? `${r.group}/${r.version}` : r.version,
+    kind: r.kind,
+    created: ago(3600),
+    age: "1h",
+    labels: {},
+    annotations: {},
+    finalizers: [],
+    owners: [],
+    conditions: [],
+    secret_keys: [],
+    events: [],
+    pod: NO_POD,
+    ...more,
+  };
+}
 
 /** A row for `kindId` with cells given by column key (missing cells are empty). */
 export function makeRow(
@@ -131,30 +200,14 @@ export function defaultCluster(): FakeCluster {
         row("v1/nodes", "", "node-1", { ready: "True", version: "v1.37.0" }),
         row("v1/nodes", "", "node-2", { ready: "True", version: "v1.37.0" }),
       ],
+      "apps/v1/replicasets": [
+        row("apps/v1/replicasets", "demo", "web-5d8f", { desired: "2", current: "2", ready: "2" }),
+      ],
       "v1/secrets": [row("v1/secrets", "demo", "db-creds", { type: "Opaque", data: "1" })],
       "v1/configmaps": [row("v1/configmaps", "demo", "settings", { data: "2" })],
       "example.com/v1/widgets": [row("example.com/v1/widgets", "demo", "gizmo")],
     },
-    pods: {
-      "demo/web-1": {
-        name: "web-1",
-        namespace: "demo",
-        phase: "Running",
-        node: "node-1",
-        ip: "10.244.0.12",
-        age: "1h",
-        labels: { app: "web" },
-        containers: [
-          { name: "app", image: "nginx:1.27", ready: true, restarts: 0, state: "running" },
-          { name: "sidecar", image: "busybox:1.36", ready: true, restarts: 0, state: "running" },
-        ],
-        log_containers: [
-          { name: "init-db", init: true },
-          { name: "app", init: false },
-          { name: "sidecar", init: false },
-        ],
-      },
-    },
+    details: podDetails(kinds),
     yaml: {},
     revealedYaml: {
       "v1/secrets|demo/db-creds": [
@@ -206,4 +259,79 @@ export function defaultCluster(): FakeCluster {
       ],
     },
   };
+}
+
+/** Pod details: `web-1` is healthy with two containers and an owner;
+ *  `crashed` is crash-looping after an OOM kill. */
+function podDetails(kinds: ResourceKind[]): Record<string, ResourceDetail> {
+  const pods = kinds.find((k) => k.id === "v1/pods")!;
+  const web1 = detail(pods, "demo", "web-1", {
+    labels: { app: "web" },
+    annotations: { "kubectl.kubernetes.io/restartedAt": "2024-05-01T10:00:00Z" },
+    owners: [{ api_version: "apps/v1", kind: "ReplicaSet", name: "web-5d8f", controller: true }],
+    conditions: [
+      { type: "Ready", status: "True", reason: "", message: "", age: "1h" },
+      { type: "PodScheduled", status: "True", reason: "", message: "", age: "1h" },
+    ],
+    events: [{ type: "Normal", reason: "Pulled", message: 'Container image "nginx:1.27" already present', count: 1, age: "1h" }],
+    pod: {
+      ...NO_POD,
+      phase: "Running",
+      node: "node-1",
+      pod_ips: ["10.244.0.12"],
+      host_ip: "172.18.0.2",
+      qos_class: "Burstable",
+      service_account: "default",
+      containers: [
+        container("init-db", "busybox:1.36", {
+          kind: "init",
+          state: { ...NO_STATE, state: "terminated", reason: "Completed", since: "1h" },
+        }),
+        container("app", "nginx:1.27", {
+          requests: { cpu: "100m", memory: "64Mi" },
+          limits: { memory: "128Mi" },
+          ports: [
+            { name: "http", port: 8080, protocol: "TCP" },
+            { name: "dns", port: 53, protocol: "UDP" },
+          ],
+          probes: [
+            { kind: "liveness", summary: "http-get :8080/healthz delay=5s timeout=1s period=10s #success=1 #failure=3" },
+          ],
+          mounts: [{ name: "config", path: "/etc/nginx/conf.d", sub_path: "", read_only: true }],
+          env: [
+            { name: "MODE", source: "" },
+            { name: "DB_PASSWORD", source: "secret:db-creds/password" },
+          ],
+        }),
+        container("sidecar", "busybox:1.36"),
+      ],
+      log_containers: [
+        { name: "init-db", init: true },
+        { name: "app", init: false },
+        { name: "sidecar", init: false },
+      ],
+    },
+  });
+  const crashed = detail(pods, "demo", "crashed", {
+    conditions: [{ type: "Ready", status: "False", reason: "ContainersNotReady", message: "containers with unready status: [app]", age: "14h" }],
+    events: [{ type: "Warning", reason: "BackOff", message: "Back-off restarting failed container app", count: 168, age: "2m" }],
+    pod: {
+      ...NO_POD,
+      phase: "Running",
+      node: "node-2",
+      pod_ips: ["10.244.1.5"],
+      qos_class: "BestEffort",
+      service_account: "default",
+      containers: [
+        container("app", "busybox:1.36", {
+          ready: false,
+          restarts: 12,
+          state: { ...NO_STATE, state: "waiting", reason: "CrashLoopBackOff", message: "back-off 5m0s restarting failed container" },
+          last_state: { state: "terminated", reason: "OOMKilled", message: "", exit_code: 137, since: "3m" },
+        }),
+      ],
+      log_containers: [{ name: "app", init: false }],
+    },
+  });
+  return { "v1/pods|demo/web-1": web1, "v1/pods|demo/crashed": crashed };
 }

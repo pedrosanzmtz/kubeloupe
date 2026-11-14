@@ -1,6 +1,6 @@
 import { expect } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
-import type { ResourceRow, WatchBatch, WatchState } from "../../lib/bindings";
+import type { DetailState, ResourceRow, WatchBatch, WatchState } from "../../lib/bindings";
 import type { CallArgs, CommandName, FakeApi } from "../fake-backend";
 import type { FakeCluster } from "../fixtures/cluster";
 
@@ -60,6 +60,18 @@ export class Fake {
 
   emitWatchState(state: WatchState & { id?: string }): Promise<void> {
     return this.page.evaluate((s) => window.__fake.emitWatchState(s), state);
+  }
+
+  lastDetailWatchId(): Promise<string | null> {
+    return this.page.evaluate(() => window.__fake.lastDetailWatchId());
+  }
+
+  activeDetailWatches(): Promise<string[]> {
+    return this.page.evaluate(() => window.__fake.activeDetailWatches());
+  }
+
+  emitDetail(state: DetailState & { id?: string }): Promise<void> {
+    return this.page.evaluate((s) => window.__fake.emitDetail(s), state);
   }
 
   emitLogLines(lines: string[], streamId?: number): Promise<void> {
