@@ -65,8 +65,10 @@ export interface FakeApi {
   failNext(cmd: CommandName, error: string): void;
   /** Id of the most recent watch (`cmd_watch_start`), or null. */
   lastWatchId(): string | null;
-  /** `streamId` of the most recent pod log stream, or null. */
+  /** `streamId` of the most recent log stream (pod or workload), or null. */
   lastStreamId(): number | null;
+  /** Ids of the log streams started and not stopped, oldest first. */
+  activeLogStreams(): number[];
   /** Send a `watch-batch`; `id` defaults to the latest watch. */
   emitWatchBatch(batch: Partial<WatchBatch>): Promise<void>;
   /** Send a `watch-state`; `id` defaults to the latest watch. */
@@ -117,6 +119,18 @@ export function installFakeBackend(cluster: FakeCluster = defaultCluster()): Fak
   let drainSeq = 0;
   let sessionSeq = 0;
   let streamId: number | null = null;
+  /** Running log streams, like the backend's map (with its cap). */
+  const logStreams = new Set<number>();
+  const MAX_LOG_STREAMS = 10;
+  const startStream = (id: number) => {
+    logStreams.delete(id);
+    if (logStreams.size >= MAX_LOG_STREAMS) {
+      throw `Too many log streams: ${MAX_LOG_STREAMS} are already open. Close a log tab to open another.`;
+    }
+    logStreams.add(id);
+    streamId = id;
+    return null;
+  };
   /** Running overview feeds, and the id of the latest one. */
   const overviewFeeds = new Set<number>();
   let lastOverview: number | null = null;
@@ -257,6 +271,8 @@ export function installFakeBackend(cluster: FakeCluster = defaultCluster()): Fak
     cmdListContexts: () => cluster.contexts,
     cmdSetContext: (name) => {
       cluster.contexts = cluster.contexts.map((c) => ({ ...c, current: c.name === name }));
+      // Like the backend: a context switch stops every log stream.
+      logStreams.clear();
       return null;
     },
     cmdListNamespaces: () => cluster.namespaces,
@@ -321,16 +337,12 @@ export function installFakeBackend(cluster: FakeCluster = defaultCluster()): Fak
       detailWatches.set(id, `${kind.id}|${row.key}`);
       return id;
     },
-    cmdStreamPodLogs: (_namespace, _name, _container, _previous, _tail, _since, _timestamps, id) => {
-      streamId = id;
+    cmdStreamPodLogs: (_namespace, _name, _container, _previous, _tail, _since, _timestamps, id) => startStream(id),
+    cmdStreamWorkloadLogs: (_kind, _namespace, _name, _options, id) => startStream(id),
+    cmdStopLogs: (id) => {
+      logStreams.delete(id);
       return null;
     },
-    cmdStopPodLogs: () => null,
-    cmdStreamWorkloadLogs: (_kind, _namespace, _name, _options, id) => {
-      streamId = id;
-      return null;
-    },
-    cmdStopWorkloadLogs: () => null,
     cmdSaveLogs: (filename) => `/home/tester/Downloads/${filename}`,
 
     cmdExecStart: () => `exec-${++sessionSeq}`,
@@ -438,6 +450,7 @@ export function installFakeBackend(cluster: FakeCluster = defaultCluster()): Fak
     },
     lastWatchId: () => (watchSeq ? `watch-${watchSeq}` : null),
     lastStreamId: () => streamId,
+    activeLogStreams: () => [...logStreams],
     emitWatchBatch: (b) =>
       events.watchBatch.emit({
         id: b.id ?? api.lastWatchId() ?? "",

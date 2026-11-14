@@ -62,6 +62,10 @@ export class Fake {
     return this.page.evaluate((s) => window.__fake.emitWatchState(s), state);
   }
 
+  activeLogStreams(): Promise<number[]> {
+    return this.page.evaluate(() => window.__fake.activeLogStreams());
+  }
+
   lastDetailWatchId(): Promise<string | null> {
     return this.page.evaluate(() => window.__fake.lastDetailWatchId());
   }
