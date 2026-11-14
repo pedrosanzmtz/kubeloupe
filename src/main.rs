@@ -1,197 +1,98 @@
+mod args;
+
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use args::{Cli, Commands};
+use clap::{CommandFactory, Parser};
 use kubeloupe::actions::{cli_action, cli_delete, cli_drain, ActionId, DrainOptions};
 use kubeloupe::{
-    client, exec_in_pod, list_namespaces, list_nodes, list_pods, parse_log_target, print_get,
-    print_pod_logs, print_pod_yaml, print_top_nodes, print_top_pods, print_workload_logs,
-    run_port_forward, watch_and_print, LogOptions, LogTarget,
+    client_with, error_text, exec_in_pod, list_namespaces, list_nodes, list_pods, parse_log_target,
+    print_describe, print_get, print_pod_logs, print_top_nodes, print_top_pods,
+    print_workload_logs, print_yaml, run_port_forward, split_target, watch_and_print, GetOptions,
+    LogOptions, LogTarget,
 };
-
-#[derive(Parser)]
-#[command(name = "kubeloupe", about = "A Lens alternative written in Rust")]
-struct Cli {
-    #[command(subcommand)]
-    command: Commands,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    /// List pods (all namespaces by default)
-    Pods {
-        /// Only list pods in this namespace
-        #[arg(short, long)]
-        namespace: Option<String>,
-    },
-    /// List namespaces
-    Namespaces,
-    /// List any resource type, including CRDs (like kubectl get)
-    Get {
-        /// Resource type: plural, kind or short name (deploy, svc, widgets.example.com)
-        kind: String,
-        /// Only list this namespace (default: all namespaces)
-        #[arg(short, long)]
-        namespace: Option<String>,
-    },
-    /// Stream live changes to any resource type (until Ctrl-C)
-    Watch {
-        /// What to watch: pods, nodes, deployments, a CRD, ...
-        #[arg(default_value = "pods")]
-        resource: String,
-        /// Only watch this namespace
-        #[arg(short, long)]
-        namespace: Option<String>,
-    },
-    /// List nodes
-    Nodes,
-    /// Show the last lines of a pod's logs, or of every pod of a workload
-    Logs {
-        /// Pod name, or `deploy/<name>`, `sts/<name>`, `ds/<name>`, `job/<name>`
-        /// to merge the logs of all its pods (`[pod] line`)
-        name: String,
-        /// Pod namespace
-        #[arg(short, long)]
-        namespace: Option<String>,
-        /// Number of lines from the end of the logs
-        #[arg(long, default_value_t = 200)]
-        tail: i64,
-        /// Container name (including init containers); default container if omitted
-        #[arg(short, long)]
-        container: Option<String>,
-        /// Show the logs of the previous (crashed) container instance
-        #[arg(short, long)]
-        previous: bool,
-        /// Stream new log lines until interrupted
-        #[arg(short, long)]
-        follow: bool,
-    },
-    /// Show CPU/memory usage (like kubectl top)
-    Top {
-        /// What to show: pods or nodes
-        #[arg(default_value = "pods")]
-        resource: String,
-    },
-    /// Set the replica count of a Deployment, StatefulSet or ReplicaSet
-    Scale {
-        /// `<kind>/<name>`, e.g. `deploy/web`
-        target: String,
-        #[arg(long)]
-        replicas: i32,
-        /// Namespace (default: `default`)
-        #[arg(short, long)]
-        namespace: Option<String>,
-    },
-    /// Restart the pods of a Deployment, StatefulSet or DaemonSet
-    Restart {
-        /// `<kind>/<name>`, e.g. `deploy/web`
-        target: String,
-        #[arg(short, long)]
-        namespace: Option<String>,
-    },
-    /// Mark a node unschedulable
-    Cordon { node: String },
-    /// Mark a node schedulable again
-    Uncordon { node: String },
-    /// Cordon a node and evict its pods (respects PodDisruptionBudgets)
-    Drain {
-        node: String,
-        /// Give up after this many seconds
-        #[arg(long, default_value_t = 300)]
-        timeout: u64,
-        /// Only evict pods matching this label selector
-        #[arg(long)]
-        pod_selector: Option<String>,
-    },
-    /// Create a Job from a CronJob now
-    Trigger {
-        /// `cronjob/<name>`
-        target: String,
-        #[arg(short, long)]
-        namespace: Option<String>,
-    },
-    /// Suspend a CronJob
-    Suspend {
-        /// `cronjob/<name>`
-        target: String,
-        #[arg(short, long)]
-        namespace: Option<String>,
-    },
-    /// Resume a suspended CronJob
-    Resume {
-        /// `cronjob/<name>`
-        target: String,
-        #[arg(short, long)]
-        namespace: Option<String>,
-    },
-    /// Delete an object of any kind
-    Delete {
-        /// `<kind>/<name>`
-        target: String,
-        #[arg(short, long)]
-        namespace: Option<String>,
-        /// Grace period 0, for pods stuck terminating (pods only)
-        #[arg(long)]
-        force: bool,
-    },
-    /// Create or update objects from a YAML file (like kubectl apply -f)
-    Apply {
-        /// Manifest file, or `-` for stdin; may hold many documents
-        #[arg(short, long)]
-        file: String,
-        /// Namespace for objects that have none (default: the context's)
-        #[arg(short, long)]
-        namespace: Option<String>,
-        /// Validate on the server only; store nothing
-        #[arg(long)]
-        dry_run: bool,
-    },
-    /// Print a pod as YAML
-    Yaml {
-        /// Pod name
-        name: String,
-        /// Pod namespace
-        #[arg(short, long)]
-        namespace: Option<String>,
-    },
-    /// Forward a pod port to localhost (until Ctrl-C)
-    #[command(name = "port-forward")]
-    PortForward {
-        /// Pod name
-        name: String,
-        /// Pod port to forward
-        port: u16,
-        /// Pod namespace
-        #[arg(short, long)]
-        namespace: Option<String>,
-    },
-    /// Run a command in a pod (non-interactive)
-    Exec {
-        /// Pod name
-        name: String,
-        /// Pod namespace
-        #[arg(short, long)]
-        namespace: Option<String>,
-        /// Container name (defaults to the pod's only container)
-        #[arg(short, long)]
-        container: Option<String>,
-        /// Command to run (after --)
-        #[arg(last = true, required = true)]
-        command: Vec<String>,
-    },
-}
+use std::io::IsTerminal;
+use std::process::ExitCode;
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> ExitCode {
+    reset_sigpipe();
+    // Diagnostics go to stderr, coloured only on a terminal, so stdout stays
+    // clean for pipes.
     tracing_subscriber::fmt()
         .with_env_filter("kubeloupe=info")
+        .with_writer(std::io::stderr)
+        .with_ansi(std::io::stderr().is_terminal())
         .init();
 
     let cli = Cli::parse();
-    let client = client().await?;
-    match cli.command {
-        Commands::Pods { namespace } => list_pods(&client, namespace.as_deref()).await?,
-        Commands::Get { kind, namespace } => {
-            print_get(&client, &kind, namespace.as_deref()).await?
+    match run(cli).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {}", error_text(&e));
+            ExitCode::FAILURE
         }
+    }
+}
+
+/// Let `kubeloupe get pods | head` end quietly, like other Unix tools,
+/// instead of panicking on a closed pipe.
+fn reset_sigpipe() {
+    #[cfg(unix)]
+    // SAFETY: `signal` with SIG_DFL only changes the process-wide action for
+    // SIGPIPE; it touches no memory of ours.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
+
+async fn run(cli: Cli) -> Result<()> {
+    if let Commands::Completions { shell } = cli.command {
+        clap_complete::generate(
+            shell,
+            &mut Cli::command(),
+            "kubeloupe",
+            &mut std::io::stdout(),
+        );
+        return Ok(());
+    }
+    // Exec credential plugins may prompt only when we have a terminal.
+    let client = client_with(
+        cli.kubeconfig.as_deref(),
+        cli.context.as_deref(),
+        std::io::stdin().is_terminal(),
+    )
+    .await?;
+    match cli.command {
+        Commands::Completions { .. } => unreachable!("handled above"),
+        Commands::Pods { namespace } => list_pods(&client, namespace.as_deref()).await?,
+        Commands::Get {
+            kind,
+            name,
+            namespace,
+            output,
+            selector,
+            field_selector,
+            reveal,
+            all_namespaces: _,
+        } => {
+            let (kind, name) = split_target(&kind, name.as_deref())?;
+            let opts = GetOptions {
+                namespace,
+                output,
+                selector,
+                field_selector,
+                reveal,
+            };
+            print_get(&client, kind, name, &opts).await?
+        }
+        Commands::Describe {
+            target,
+            name,
+            namespace,
+        } => match split_target(&target, name.as_deref())? {
+            (kind, Some(name)) => print_describe(&client, kind, name, namespace.as_deref()).await?,
+            (_, None) => anyhow::bail!("describe needs <kind>/<name> or <kind> <name>"),
+        },
         Commands::Watch {
             resource,
             namespace,
@@ -229,8 +130,12 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Top { resource } => match resource.as_str() {
-            "pods" => print_top_pods(&client).await?,
+        Commands::Top {
+            resource,
+            namespace,
+        } => match resource.as_str() {
+            "pods" => print_top_pods(&client, namespace.as_deref()).await?,
+            "nodes" if namespace.is_some() => anyhow::bail!("nodes are not namespaced: drop -n"),
             "nodes" => print_top_nodes(&client).await?,
             other => anyhow::bail!("unknown resource for top: {other} (use pods or nodes)"),
         },
@@ -329,8 +234,17 @@ async fn main() -> Result<()> {
             namespace,
             dry_run,
         } => kubeloupe::resources::cli_apply(&client, &file, namespace.as_deref(), dry_run).await?,
-        Commands::Yaml { name, namespace } => {
-            print_pod_yaml(&client, namespace.as_deref(), &name).await?
+        Commands::Yaml {
+            target,
+            namespace,
+            reveal,
+        } => {
+            // A bare name is a pod, as before generic kinds were supported.
+            let (kind, name) = match split_target(&target, None)? {
+                (kind, Some(name)) => (kind, name),
+                (name, None) => ("pod", name),
+            };
+            print_yaml(&client, kind, name, namespace.as_deref(), reveal).await?
         }
         Commands::PortForward {
             name,

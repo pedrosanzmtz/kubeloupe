@@ -102,7 +102,14 @@ pub async fn get_resource_yaml(
     name: &str,
     reveal: bool,
 ) -> Result<String> {
-    let mut obj = get_resource(client, r, namespace, name).await?;
+    let obj = get_resource(client, r, namespace, name).await?;
+    to_yaml(object_value(r, obj, reveal)?)
+}
+
+/// An object as JSON for output: without `managedFields`, with `apiVersion`
+/// and `kind` filled in (lists leave them out), and Secret values replaced
+/// by [`REDACTED`] unless `reveal` is set.
+pub fn object_value(r: &ResourceRef, mut obj: DynamicObject, reveal: bool) -> Result<Value> {
     obj.metadata.managed_fields = None;
     let mut value = serde_json::to_value(&obj)?;
     if let Some(map) = value.as_object_mut() {
@@ -115,6 +122,11 @@ pub async fn get_resource_yaml(
     if is_secret(r) && !reveal {
         redact_secret(&mut value);
     }
+    Ok(value)
+}
+
+/// YAML with `apiVersion`, `kind` and `metadata` first.
+pub fn to_yaml(value: Value) -> Result<String> {
     Ok(serde_yaml::to_string(&ordered(value))?)
 }
 
