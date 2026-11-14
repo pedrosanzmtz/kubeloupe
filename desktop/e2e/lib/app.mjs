@@ -86,14 +86,26 @@ export async function launch(name) {
   // The app inherits this environment through tauri-driver and WebKitWebDriver.
   const env = { ...process.env, KUBECONFIG: testKubeconfig() };
   const log = createWriteStream(join(ARTIFACTS, `${name}-app.log`));
+  // Its own process group: WebKitWebDriver and the app inherit it, and ending
+  // the session does not always stop the app, so stop() kills the group.
   const driverProc = spawn(process.env.TAURI_DRIVER || "tauri-driver", args, {
     env,
     stdio: ["ignore", "pipe", "pipe"],
+    detached: true,
   });
   driverProc.stdout.pipe(log);
   driverProc.stderr.pipe(log);
-  const exited = new Promise((r) => driverProc.once("exit", r));
   driverProc.once("error", (e) => log.write(`tauri-driver: ${e}\n`));
+  const stop = () => {
+    try {
+      process.kill(-driverProc.pid, "SIGKILL");
+    } catch {
+      /* already gone */
+    }
+    driverProc.stdout.destroy();
+    driverProc.stderr.destroy();
+    log.end();
+  };
 
   try {
     await waitForPort(port, 15_000);
@@ -102,14 +114,11 @@ export async function launch(name) {
       .withCapabilities({ browserName: "wry", "tauri:options": { application: app } })
       .build();
     return new App(driver, name, async () => {
-      await driver.quit().catch(() => {});
-      driverProc.kill();
-      await Promise.race([exited, sleep(5000)]);
-      log.end();
+      await Promise.race([driver.quit().catch(() => {}), sleep(5000)]);
+      stop();
     });
   } catch (e) {
-    driverProc.kill();
-    log.end();
+    stop();
     throw e;
   }
 }

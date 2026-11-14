@@ -26,7 +26,8 @@ gh run download <run-id> -n e2e-screenshots
 ## Running locally
 
 You need the kind cluster (`bash scripts/test-cluster/setup.sh`), plus
-`WebKitWebDriver` (Ubuntu: `sudo apt install webkit2gtk-driver`), `tauri-driver`
+`WebKitWebDriver` (Ubuntu: `sudo apt install webkit2gtk-driver`, renamed
+`webkitgtk-webdriver` in newer releases), `tauri-driver`
 (`cargo install tauri-driver --locked`) and, if you don't want windows opening
 on your desktop, `xvfb-run` (`sudo apt install xvfb`).
 
@@ -57,6 +58,14 @@ variables are optional:
 
 If you run several copies at once, give each its own `E2E_DRIVER_PORT` and
 `BENCH_PORT`.
+
+Rebuild the frontend before the app (`npm run build`, then `cargo build`).
+The app embeds `ui-src/dist` at compile time, so a stale `dist` gives you a
+UI without the current `data-testid`s.
+
+Under Xvfb, WebKitGTK worked without `WEBKIT_DISABLE_COMPOSITING_MODE` or
+`LIBGL_ALWAYS_SOFTWARE`, both on the CI runner and locally (WebKitGTK 2.50).
+CI sets neither.
 
 A plain `cargo build` without `tauri/custom-protocol` loads `devUrl`
 (`http://localhost:1420`) instead of the embedded frontend. The smoke suite
