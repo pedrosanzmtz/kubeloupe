@@ -247,10 +247,10 @@ async fn run(cli: Cli) -> Result<()> {
             print_yaml(&client, kind, name, namespace.as_deref(), reveal).await?
         }
         Commands::PortForward {
-            name,
-            port,
+            target,
+            ports,
             namespace,
-        } => run_port_forward(&client, namespace.as_deref(), &name, port).await?,
+        } => run_port_forward(&client, namespace.as_deref(), &target, &ports).await?,
         Commands::Exec {
             name,
             namespace,

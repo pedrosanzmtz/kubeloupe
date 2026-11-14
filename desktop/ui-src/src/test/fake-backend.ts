@@ -33,6 +33,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { commands, events } from "../lib/bindings";
 import type {
   ApplyResult,
+  ForwardInfo,
   DetailState,
   Overview_Serialize,
   ResourceKind,
@@ -93,6 +94,8 @@ export interface FakeApi {
   emitLogLines(lines: string[], streamId?: number): Promise<void>;
   /** Send `pod-log-error`, then (if `done`) `pod-log-done`. */
   emitLogEnd(error: string, done?: boolean, streamId?: number): Promise<void>;
+  /** URLs the app asked `tauri-plugin-opener` to open. */
+  opened(): string[];
 }
 
 declare global {
@@ -354,8 +357,38 @@ export function installFakeBackend(cluster: FakeCluster = defaultCluster()): Fak
     cmdExecInput: () => null,
     cmdExecResize: () => null,
     cmdExecClose: () => null,
-    cmdPortforwardStart: (_namespace, _name, port) => ({ session: `pf-${++sessionSeq}`, local_port: 40000 + port }),
-    cmdPortforwardStop: () => null,
+    // Like the backend: no local port means the remote one if >= 1024, else 40000 + it.
+    cmdPortforwardStart: (target, remote, local) => {
+      const same = (f: ForwardInfo) =>
+        f.target.kind === target.kind && f.target.namespace === target.namespace && f.target.name === target.name;
+      const existing = local === null ? cluster.forwards.find((f) => same(f) && f.remote === remote) : undefined;
+      if (existing) return existing;
+      const remotePort = /^\d+$/.test(remote) ? Number(remote) : 8080;
+      const port = local ?? (remotePort >= 1024 ? remotePort : 40000 + remotePort);
+      const localPort = port === 0 ? 45000 + sessionSeq : port;
+      if (local !== null && cluster.forwards.some((f) => f.local_port === localPort)) {
+        throw `local port ${localPort} is already in use: pick another one, or leave it empty for a free one`;
+      }
+      const f: ForwardInfo = {
+        id: `pf-${++sessionSeq}`,
+        target,
+        remote,
+        remote_port: remotePort,
+        local_port: localPort,
+        url: `http://127.0.0.1:${localPort}`,
+        started_at: Date.now(),
+        status: { pod: target.kind === "pod" ? target.name : `${target.name}-1`, connections: 0, total_connections: 0, last_error: "" },
+      };
+      cluster.forwards.push(f);
+      return f;
+    },
+    cmdPortforwardStop: (id) => {
+      cluster.forwards = cluster.forwards.filter((f) => f.id !== id);
+      return null;
+    },
+    // A copy, like real IPC: the app must see a new list after the tests change this one.
+    cmdPortforwardList: () => JSON.parse(JSON.stringify(cluster.forwards)) as ForwardInfo[],
+    cmdServicePorts: (namespace, name) => cluster.servicePorts[`${namespace}/${name}`] ?? [],
 
     cmdGetResourceDetail: (resource, namespace, name) => detailOf(resource, namespace, name),
     cmdGetRelated: (resource, namespace, name) => {
@@ -428,7 +461,14 @@ export function installFakeBackend(cluster: FakeCluster = defaultCluster()): Fak
     cmdCancelDrain: () => null,
   };
 
+  const opened: string[] = [];
+
   async function handle(cmd: string, args: CallArgs | undefined): Promise<unknown> {
+    // tauri-plugin-opener's `openUrl` (Open in browser).
+    if (cmd === "plugin:opener|open_url") {
+      opened.push(String(args?.url));
+      return null;
+    }
     const name = toCamel(cmd);
     const handler = HANDLERS[name] as ((...a: unknown[]) => unknown) | undefined;
     if (!handler) throw new Error(`fake backend: no handler for ${cmd}`);
@@ -476,6 +516,7 @@ export function installFakeBackend(cluster: FakeCluster = defaultCluster()): Fak
     },
     emitOverviewState: (s) => events.overviewState.emit({ ...s, id: s.id ?? lastOverview ?? -1 }),
     emitLogLines: (lines, id) => events.podLog.emit({ streamId: id ?? streamId ?? -1, data: lines }),
+    opened: () => [...opened],
     emitLogEnd: async (error, done = true, id) => {
       const sid = id ?? streamId ?? -1;
       if (error) await events.podLogError.emit({ streamId: sid, data: error });

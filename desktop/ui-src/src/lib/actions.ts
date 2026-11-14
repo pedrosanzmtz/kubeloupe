@@ -46,6 +46,7 @@ const VERB: Record<ActionId, string> = {
   trigger: "Trigger",
   suspend: "Suspend",
   resume: "Resume",
+  portForward: "Port forward",
 };
 
 export interface Copy {

@@ -144,7 +144,7 @@ test("the row menu opens from the keyboard and its items are reachable with arro
   await expect(menu(page).locator(".title")).toHaveText("demo/crashed");
   // Logs and Shell (dock tabs) come first, then the actions.
   await expect(menu(page).getByRole("menuitem", { name: "Logs", exact: true })).toBeFocused();
-  for (let i = 0; i < 3; i++) await page.keyboard.press("ArrowDown");
+  for (let i = 0; i < 4; i++) await page.keyboard.press("ArrowDown");
   await expect(menu(page).getByRole("menuitem", { name: "Force delete…" })).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(dialog(page)).toHaveAccessibleName("Force delete Pod");

@@ -69,12 +69,16 @@ test("container cards show state, resources, ports, probes, mounts and env names
   await expect(app).toContainText("MODE value set");
 });
 
-test("a port's Forward button starts the existing port-forward", async ({ page }) => {
+test("a port's Forward button starts a port-forward", async ({ page }) => {
   const fake = await openPod(page, "web-1");
   await card(page, "app").getByRole("button", { name: "Forward port 8080" }).click();
   await expect.poll(() => fake.calls("cmdPortforwardStart")).toHaveLength(1);
-  expect(await fake.lastCall("cmdPortforwardStart")).toEqual({ namespace: "demo", name: "web-1", port: 8080 });
-  await expect(panel(page).getByText("Forwarding 127.0.0.1:48080 → web-1:8080")).toBeVisible();
+  expect(await fake.lastCall("cmdPortforwardStart")).toEqual({
+    target: { kind: "pod", namespace: "demo", name: "web-1" },
+    remotePort: "8080",
+    localPort: null,
+  });
+  await expect(panel(page).getByText("Forwarding http://127.0.0.1:8080 → web-1:8080")).toBeVisible();
   await expect(panel(page).getByLabel("Pod port")).toHaveValue("8080");
 });
 
