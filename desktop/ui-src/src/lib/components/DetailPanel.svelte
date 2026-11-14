@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import ActionBar from "./ActionBar.svelte";
   import LogViewer from "./LogViewer.svelte";
   import PortForward from "./PortForward.svelte";
   import Terminal from "./Terminal.svelte";
@@ -35,6 +36,8 @@
     <span class="title">{pod.namespace}/{pod.name}</span>
     <button type="button" class="close" aria-label="Close details" onclick={closeDetail}>✕</button>
   </div>
+
+  <ActionBar {target} />
 
   <div class="body">
     {#if loadError}

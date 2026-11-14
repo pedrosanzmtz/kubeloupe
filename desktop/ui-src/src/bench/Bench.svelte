@@ -24,6 +24,7 @@
     crd: false,
     verbs: ["list", "watch"],
     short_names: [],
+    actions: [],
     columns: [
       col("name", "Name", "text"),
       col("namespace", "Namespace", "text"),

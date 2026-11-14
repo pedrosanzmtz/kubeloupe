@@ -134,6 +134,8 @@ pub struct ResourceKind {
     pub verbs: Vec<String>,
     pub short_names: Vec<String>,
     pub columns: Vec<ColumnDef>,
+    /// What can be done to objects of this kind ([`crate::actions::actions_for`]).
+    pub actions: Vec<crate::actions::ActionDef>,
 }
 
 /// A row of a resource table: identity plus one cell per column. Columns the
@@ -1267,6 +1269,7 @@ pub async fn discover(client: &Client) -> Result<Vec<ResourceKind>> {
                 verbs: r.verbs.clone(),
                 short_names: r.short_names.clone().unwrap_or_default(),
                 columns: columns_for(&resource, printer_cols),
+                actions: crate::actions::actions_for(&resource, &r.verbs),
                 resource,
             });
         }
@@ -2054,6 +2057,7 @@ mod tests {
             verbs: vec![],
             short_names: short.iter().map(|s| s.to_string()).collect(),
             columns: vec![],
+            actions: vec![],
             resource,
         }
     }
