@@ -49,6 +49,14 @@ Svelte) and a CLI, both built on the same Rust core.
   Delete deletes, Shift+F10 opens the row menu, `/` focuses the filter and
   `?` lists every shortcut.
 - **Multi-cluster**: switch between your kubeconfig contexts from the header.
+- **Remembers where you were**: the last context, and per context the view
+  and namespaces; per kind the table sort and hidden columns (Columns
+  button); the detail panel width (drag its left edge). The Settings page
+  (gear in the header, Ctrl+, / Cmd+,) has the theme (System, Dark, Light)
+  and the log viewer defaults. Saved in `settings.json` in the app's config
+  directory (`~/.config/com.kubeloupe.app/` on Linux,
+  `~/Library/Application Support/com.kubeloupe.app/` on macOS,
+  `%APPDATA%\com.kubeloupe.app\` on Windows).
 
 ## CLI
 

@@ -337,7 +337,7 @@
   }
   .banner.error {
     border: 1px solid var(--red);
-    color: #f5a3a5;
+    color: var(--error-text);
   }
   .banner-actions {
     display: flex;

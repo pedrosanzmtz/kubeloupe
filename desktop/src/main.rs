@@ -1,11 +1,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use crate::settings::SettingsStore;
 use crate::state::AppState;
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use tauri::Manager;
 use tauri_specta::{collect_commands, collect_events, Builder};
 
 mod commands;
+mod settings;
 #[cfg(unix)]
 mod shell_env;
 mod state;
@@ -47,7 +50,9 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::actions::cmd_run_action,
             commands::actions::cmd_bulk_delete,
             commands::actions::cmd_drain_node,
-            commands::actions::cmd_cancel_drain
+            commands::actions::cmd_cancel_drain,
+            commands::settings::cmd_get_settings,
+            commands::settings::cmd_update_settings
         ])
         .events(collect_events![
             commands::watch::WatchBatch,
@@ -101,10 +106,24 @@ fn main() {
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);
+            let path = app
+                .path()
+                .app_config_dir()
+                .ok()
+                .map(|d| d.join("settings.json"));
+            app.manage(SettingsStore::open(path));
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running kubeloupe");
+        .build(tauri::generate_context!())
+        .expect("error while building kubeloupe")
+        .run(|app, event| {
+            // Write settings changed in the last moments before quitting.
+            if let tauri::RunEvent::Exit = event {
+                if let Some(store) = app.try_state::<Arc<SettingsStore>>() {
+                    store.flush();
+                }
+            }
+        });
 }
 
 #[cfg(test)]

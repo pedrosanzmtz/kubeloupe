@@ -9,7 +9,7 @@ import { app, canOpenDenied, kinds, refresh, setView, switchContext, switchNames
 import { requestAction } from "./actions.svelte";
 import { openCreate } from "./create.svelte";
 import { openDetail } from "./detail.svelte";
-import { activeTable, openHelp } from "./keyboard.svelte";
+import { activeTable, openHelp, openSettings } from "./keyboard.svelte";
 import { whenDiscarded } from "./unsaved.svelte";
 
 /** Ids of recently run entries, newest first (this session). */
@@ -29,6 +29,13 @@ export function paletteItems(): PaletteItem[] {
     { id: "cmd:overview", group: "Command", label: "Go to Overview", run: () => setView("overview") },
     { id: "cmd:refresh", group: "Command", label: "Refresh", terms: ["reload"], run: refresh },
     { id: "cmd:help", group: "Command", label: "Keyboard shortcuts", terms: ["help", "keys"], run: openHelp },
+    {
+      id: "cmd:settings",
+      group: "Command",
+      label: "Settings…",
+      terms: ["preferences", "theme", "options"],
+      run: openSettings,
+    },
   ];
 
   const table = activeTable();

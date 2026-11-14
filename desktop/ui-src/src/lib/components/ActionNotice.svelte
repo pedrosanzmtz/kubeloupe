@@ -24,7 +24,7 @@
   .notice.fail {
     background: rgba(229, 72, 77, 0.15);
     border-color: var(--red);
-    color: #f5a3a5;
+    color: var(--error-text);
   }
   .x {
     background: transparent;

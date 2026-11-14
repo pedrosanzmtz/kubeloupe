@@ -2219,6 +2219,7 @@ dependencies = [
  "kube",
  "kubeloupe",
  "serde",
+ "serde_json",
  "specta",
  "specta-typescript",
  "tauri",
