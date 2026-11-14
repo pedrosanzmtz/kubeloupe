@@ -1,7 +1,8 @@
 //! Contexts, namespaces, metrics, discovery and access checks.
 
 use crate::state::{
-    client, selected_context, stop_all_exec, stop_all_forwards, stop_all_watches, AppState,
+    client, selected_context, stop_all_exec, stop_all_forwards, stop_all_local_shells,
+    stop_all_watches, AppState,
 };
 use kubeloupe::resources::{self, AccessResult, ResourceKind, ResourceRef};
 use kubeloupe::{
@@ -124,6 +125,7 @@ pub(crate) async fn cmd_set_context(
 ) -> Result<(), String> {
     state.log_streams.stop_all();
     stop_all_exec(&state);
+    stop_all_local_shells(&state);
     stop_all_forwards(&state);
     stop_all_watches(&state);
     state.kinds.lock().unwrap().clear();

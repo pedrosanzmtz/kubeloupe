@@ -358,6 +358,15 @@ export function installFakeBackend(cluster: FakeCluster = defaultCluster()): Fak
     cmdExecInput: () => null,
     cmdExecResize: () => null,
     cmdExecClose: () => null,
+    // A local shell at the selected context; `namespace` as asked.
+    cmdLocalShellStart: (namespace) => ({
+      session: `local-${++sessionSeq}`,
+      context: cluster.contexts.find((c) => c.current)?.name ?? "",
+      namespace: namespace ?? "default",
+    }),
+    cmdLocalShellInput: () => null,
+    cmdLocalShellResize: () => null,
+    cmdLocalShellClose: () => null,
     // Like the backend: no local port means the remote one if >= 1024, else 40000 + it.
     cmdPortforwardStart: (target, remote, local) => {
       const same = (f: ForwardInfo) =>

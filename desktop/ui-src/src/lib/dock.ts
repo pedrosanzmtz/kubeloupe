@@ -17,7 +17,12 @@ export type DockTabSpec =
   | { type: "podLogs"; pod: PodTabRef; containers?: LogContainer[] }
   | { type: "workloadLogs"; workload: WorkloadRef }
   /** `container`: undefined picks the pod's first regular container. */
-  | { type: "terminal"; pod: PodTabRef; container?: string | null };
+  | { type: "terminal"; pod: PodTabRef; container?: string | null }
+  /**
+   * A shell on this machine, pointed at `context` and `namespace` as they
+   * were when it opened. `seq` tells several of them apart.
+   */
+  | { type: "localShell"; seq: number; context: string; namespace: string };
 
 export type DockTab = DockTabSpec & {
   /** Stable per object: opening the same thing again focuses this tab. */
@@ -36,6 +41,8 @@ export function tabId(spec: DockTabSpec): string {
       return `wlogs:${spec.workload.kind}:${spec.workload.namespace}/${spec.workload.name}`;
     case "terminal":
       return `shell:${spec.pod.namespace}/${spec.pod.name}`;
+    case "localShell":
+      return `local:${spec.seq}`;
   }
 }
 
@@ -47,7 +54,22 @@ export function tabTitle(spec: DockTabSpec): string {
       return `Logs: ${spec.workload.kind.toLowerCase()}/${spec.workload.name}`;
     case "terminal":
       return `Shell: ${spec.pod.name}`;
+    case "localShell":
+      return localShellTitle(spec.context, spec.namespace);
   }
+}
+
+/** `<context> · <namespace>`, or "Local shell" without a context. */
+export function localShellTitle(context: string, namespace: string): string {
+  return context ? `${context} · ${namespace}` : "Local shell";
+}
+
+/**
+ * The namespace a new local shell uses: the first selected one, otherwise
+ * (all namespaces) the context's own, otherwise `default`, as kubectl would.
+ */
+export function localShellNamespace(selected: readonly string[], contextNamespace: string | null | undefined): string {
+  return selected[0] || contextNamespace || "default";
 }
 
 export function makeTab(spec: DockTabSpec): DockTab {

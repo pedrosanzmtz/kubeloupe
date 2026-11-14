@@ -1,7 +1,37 @@
 import { describe, expect, it } from "vitest";
 import type { ResourceRef } from "./bindings";
-import { DOCK_MIN_HEIGHT, clampHeight, closeTab, dockMenuFor, openTab, tabId } from "./dock";
+import {
+  DOCK_MIN_HEIGHT,
+  clampHeight,
+  closeTab,
+  dockMenuFor,
+  localShellNamespace,
+  localShellTitle,
+  openTab,
+  tabId,
+} from "./dock";
 import type { DockTab, DockTabSpec } from "./dock";
+
+describe("local shells", () => {
+  const local = (seq: number, namespace: string): DockTabSpec => ({ type: "localShell", seq, context: "kind-dev", namespace });
+
+  it("are titled `<context> · <namespace>` and each gets its own tab", () => {
+    const a = openTab([], local(1, "demo"));
+    const b = openTab(a.tabs, local(2, "demo"));
+    expect(b.tabs.map((t) => [t.id, t.title])).toEqual([
+      ["local:1", "kind-dev · demo"],
+      ["local:2", "kind-dev · demo"],
+    ]);
+    expect(localShellTitle("", "default")).toBe("Local shell");
+  });
+
+  it("use the first selected namespace, else the context's, else default", () => {
+    expect(localShellNamespace(["b", "a"], "ctx-ns")).toBe("b");
+    expect(localShellNamespace([], "ctx-ns")).toBe("ctx-ns");
+    expect(localShellNamespace([], null)).toBe("default");
+    expect(localShellNamespace([], undefined)).toBe("default");
+  });
+});
 
 const POD: ResourceRef = { group: "", version: "v1", kind: "Pod", plural: "pods" } as ResourceRef;
 const DEPLOY: ResourceRef = { group: "apps", version: "v1", kind: "Deployment", plural: "deployments" } as ResourceRef;
