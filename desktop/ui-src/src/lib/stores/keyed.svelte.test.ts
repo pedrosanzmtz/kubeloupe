@@ -61,6 +61,31 @@ describe("KeyedStore", () => {
     expect(s.entries[0]).toBe(unchanged);
   });
 
+  it("a snapshot replaces only the rows of its own source", () => {
+    const s = store();
+    s.applyBatch({ snapshot: true, applied: [r("app/a"), r("app/b")], deleted: [] }, "app");
+    s.applyBatch({ snapshot: true, applied: [r("db/x")], deleted: [] }, "db");
+    s.applyBatch({ snapshot: true, applied: [r("app/b", "b2"), r("app/c")], deleted: [] }, "app");
+    expect(keys(s)).toEqual(["app/b", "db/x", "app/c"]);
+    // An empty snapshot clears its source only.
+    s.applyBatch({ snapshot: true, applied: [], deleted: [] }, "db");
+    expect(keys(s)).toEqual(["app/b", "app/c"]);
+  });
+
+  it("removes a source's rows and leaves the others", () => {
+    const s = store();
+    s.applyBatch({ snapshot: true, applied: [r("app/a")], deleted: [] }, "app");
+    s.applyBatch({ snapshot: false, applied: [r("db/x"), r("db/y")], deleted: [] }, "db");
+    const before = s.entries;
+    s.removeSource("nope");
+    expect(s.entries).toBe(before);
+    s.removeSource("db");
+    expect(keys(s)).toEqual(["app/a"]);
+    // A later snapshot of the removed source does not see stale rows.
+    s.applyBatch({ snapshot: true, applied: [r("db/z")], deleted: [] }, "db");
+    expect(keys(s)).toEqual(["app/a", "db/z"]);
+  });
+
   it("is reactive: an effect sees every batch", () => {
     const s = store();
     const seen: number[] = [];

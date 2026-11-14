@@ -35,6 +35,8 @@ export interface FakeCluster {
    * them without a namespace, and their watches end with a 403 there.
    */
   deniedClusterWide: string[];
+  /** Namespaces whose watches end with a 403 (`forbidden`). */
+  deniedNamespaces: string[];
   /** Rows by kind id; watches serve these. */
   rows: Record<string, ResourceRow[]>;
   /** Details by `kindId|rowKey`; other objects get a generated one. */
@@ -190,6 +192,7 @@ export function defaultCluster(): FakeCluster {
     kinds,
     denied: ["rbac.authorization.k8s.io/v1/clusterroles", "v1/componentstatuses"],
     deniedClusterWide: [],
+    deniedNamespaces: [],
     rows: {
       "v1/pods": [
         pod("demo", "web-1", "Running"),
