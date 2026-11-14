@@ -46,7 +46,7 @@ test("a header click sorts ascending, then descending, then back to key order", 
 test("sorting by a metric column sorts by usage, missing metrics last", async ({ page }) => {
   await openApp(page);
   await openKind(page, "Pods");
-  await expect(row(page, "web-1").getByRole("cell", { name: "250m" })).toBeVisible();
+  await expect(row(page, "web-1").getByRole("gridcell", { name: "250m" })).toBeVisible();
   await page.getByRole("columnheader", { name: "CPU" }).click();
   await page.getByRole("columnheader", { name: "CPU" }).click();
   expect((await column(page, "Name")).slice(0, 2)).toEqual(["web-2", "web-1"]);
@@ -55,10 +55,10 @@ test("sorting by a metric column sorts by usage, missing metrics last", async ({
 test("pod metrics are merged into the CPU and Memory columns", async ({ page }) => {
   const fake = await openApp(page);
   await openKind(page, "Pods");
-  await expect(row(page, "web-1").getByRole("cell", { name: "250m" })).toBeVisible();
-  await expect(row(page, "web-1").getByRole("cell", { name: "64Mi" })).toBeVisible();
-  await expect(row(page, "web-2").getByRole("cell", { name: "1.5", exact: true })).toBeVisible();
-  await expect(row(page, "web-2").getByRole("cell", { name: "1.5Gi" })).toBeVisible();
+  await expect(row(page, "web-1").getByRole("gridcell", { name: "250m" })).toBeVisible();
+  await expect(row(page, "web-1").getByRole("gridcell", { name: "64Mi" })).toBeVisible();
+  await expect(row(page, "web-2").getByRole("gridcell", { name: "1.5", exact: true })).toBeVisible();
+  await expect(row(page, "web-2").getByRole("gridcell", { name: "1.5Gi" })).toBeVisible();
   // No metrics for this pod.
   expect(await column(page, "CPU")).toEqual(["—", "—", "250m", "1.5", "—"]);
   expect((await fake.calls("cmdGetMetrics")).length).toBeGreaterThan(0);

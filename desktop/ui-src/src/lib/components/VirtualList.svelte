@@ -62,6 +62,11 @@
   export function scrollToTop() {
     if (scrollEl) scrollEl.scrollTop = 0;
   }
+
+  /** Scroll just enough to show row `index` (keyboard focus). */
+  export function scrollToIndex(index: number) {
+    if (index >= 0 && index < count) get(virtualizer).scrollToIndex(index, { align: "auto" });
+  }
 </script>
 
 <div class="scroller" class:scroll-x={scrollX} bind:this={scrollEl} {onscroll}>
