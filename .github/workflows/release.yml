@@ -225,10 +225,12 @@ jobs:
         shell: bash
         run: |
           mkdir dist
-          shopt -s nullglob globstar
-          for f in target/**/release/bundle/{appimage/*.AppImage,deb/*.deb,dmg/*.dmg,msi/*.msi,nsis/*.exe}; do
-            cp "$f" dist/
-          done
+          # target/release/bundle, or target/<triple>/release/bundle. (No
+          # globstar: macOS ships bash 3.2.)
+          find target -path '*/release/bundle/*' -type f \( \
+              -path '*/bundle/appimage/*.AppImage' -o -path '*/bundle/deb/*.deb' -o \
+              -path '*/bundle/dmg/*.dmg' -o -path '*/bundle/msi/*.msi' -o \
+              -path '*/bundle/nsis/*.exe' \) -exec cp {} dist/ \;
           ls -l dist
           case "$RUNNER_OS" in
             Linux)   want=("*.AppImage" "*.deb") ;;
@@ -243,7 +245,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           dpkg -I dist/*.deb
-          dpkg -c dist/*.deb | grep -E '\./usr/bin/'
+          dpkg -c dist/*.deb | grep -E 'usr/bin/[^/]+$'
           appimage=$(ls dist/*.AppImage)
           chmod +x "$appimage"
           (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/$appimage" --appimage-extract >/dev/null)
