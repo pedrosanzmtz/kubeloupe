@@ -10,7 +10,7 @@
 //   E2E_DRIVER_PORT port for tauri-driver (default: 4444; the native driver gets +1)
 
 import { spawn, execFileSync } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -39,11 +39,11 @@ function testKubeconfig() {
   const yaml = execFileSync("kubectl", ["config", "view", "--minify", "--flatten", "--context", CONTEXT], {
     encoding: "utf8",
   });
-  const dir = join(tmpdir(), `kubeloupe-e2e-${process.pid}`);
-  mkdirSync(dir, { recursive: true });
+  // Holds credentials: private directory, removed when the app stops.
+  const dir = mkdtempSync(join(tmpdir(), "kubeloupe-e2e-"));
   const path = join(dir, "kubeconfig");
   writeFileSync(path, yaml, { mode: 0o600 });
-  return path;
+  return { dir, path };
 }
 
 function waitForPort(port, timeoutMs) {
@@ -84,7 +84,8 @@ export async function launch(name) {
   if (process.env.WEBKIT_DRIVER) args.push("--native-driver", process.env.WEBKIT_DRIVER);
 
   // The app inherits this environment through tauri-driver and WebKitWebDriver.
-  const env = { ...process.env, KUBECONFIG: testKubeconfig() };
+  const kubeconfig = testKubeconfig();
+  const env = { ...process.env, KUBECONFIG: kubeconfig.path };
   const log = createWriteStream(join(ARTIFACTS, `${name}-app.log`));
   // Its own process group: WebKitWebDriver and the app inherit it, and ending
   // the session does not always stop the app, so stop() kills the group.
@@ -105,6 +106,7 @@ export async function launch(name) {
     driverProc.stdout.destroy();
     driverProc.stderr.destroy();
     log.end();
+    rmSync(kubeconfig.dir, { recursive: true, force: true });
   };
 
   try {
