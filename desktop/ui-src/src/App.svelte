@@ -25,10 +25,8 @@
     app,
     checkAccess,
     currentKind,
-    initScope,
-    loadContexts,
     loadKinds,
-    loadNamespaces,
+    startApp,
   } from "./lib/stores/app.svelte";
   import { detail } from "./lib/stores/detail.svelte";
   import { listenDrain } from "./lib/stores/actions.svelte";
@@ -36,29 +34,26 @@
   import { handleKey, keyboard } from "./lib/stores/keyboard.svelte";
   import CommandPalette from "./lib/components/CommandPalette.svelte";
   import ShortcutHelp from "./lib/components/ShortcutHelp.svelte";
+  import SettingsDialog from "./lib/components/SettingsDialog.svelte";
+  import PanelResizer from "./lib/components/PanelResizer.svelte";
 
   onMount(() => {
     // Subscribe before the first watch starts; events that still race ahead
     // of cmd_watch_start's reply are buffered by the live store.
     const unlisten = live.listen();
     const unlistenDrain = listenDrain();
-    (async () => {
-      await loadContexts();
-      await loadNamespaces();
-      await initScope();
-      await checkLeftovers();
-    })();
+    void startApp().then(() => checkLeftovers());
     return () => {
       unlisten.then((un) => un());
       unlistenDrain.then((un) => un());
     };
   });
 
-  // Discover what the cluster serves on start, on Refresh and on a context
-  // switch (all bump the nonce).
+  // Discover what the cluster serves once the remembered context is
+  // restored, on Refresh and on a context switch (all bump the nonce).
   $effect(() => {
     void app.refreshNonce;
-    untrack(loadKinds);
+    if (app.ready) untrack(loadKinds);
   });
 
   // Access depends on the scope: re-check when the namespace changes.
@@ -83,7 +78,9 @@
     <ErrorBanner />
     <ActionNotice />
     <NodeShellLeftovers />
-    {#if app.view === "overview"}
+    {#if !app.ready}
+      <!-- Restoring the remembered context and namespaces. -->
+    {:else if app.view === "overview"}
       <Overview />
     {:else if app.view === PORT_FORWARDS_VIEW}
       <PortForwards />
@@ -95,6 +92,7 @@
   </section>
   {#if detail.target && kind && detail.target.resource.kind === kind.resource.kind &&
     detail.target.resource.group === kind.resource.group}
+    <PanelResizer />
     {#key detail.nonce}
       {#if isPod(kind)}
         <DetailPanel target={detail.target} />
@@ -116,6 +114,9 @@
 {/if}
 {#if keyboard.help}
   <ShortcutHelp />
+{/if}
+{#if keyboard.settings}
+  <SettingsDialog />
 {/if}
 
 <style>

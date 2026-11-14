@@ -149,7 +149,7 @@
     font-size: 15px;
   }
   h2.danger {
-    color: #f5a3a5;
+    color: var(--error-text);
   }
   .lead {
     margin: 0 0 8px;
@@ -205,7 +205,7 @@
   }
   .confirm.danger {
     border-color: var(--red);
-    color: #f5a3a5;
+    color: var(--error-text);
   }
   .btn:disabled {
     opacity: 0.4;

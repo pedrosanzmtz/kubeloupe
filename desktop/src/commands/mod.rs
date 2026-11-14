@@ -10,4 +10,5 @@ pub(crate) mod logs;
 pub(crate) mod overview;
 pub(crate) mod portforward;
 pub(crate) mod resources;
+pub(crate) mod settings;
 pub(crate) mod watch;

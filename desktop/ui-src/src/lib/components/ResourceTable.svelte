@@ -16,6 +16,8 @@
   import type { KeyedStore } from "../stores/keyed.svelte";
   import { visibleEntries } from "../view";
   import type { Sort } from "../view";
+  import { sortOf, withSort } from "../settings";
+  import { kindSettings, updateSettings } from "../stores/settings.svelte";
 
   interface Props {
     kind: ResourceKind;
@@ -45,9 +47,13 @@
 
   const ROW_HEIGHT = 28;
 
-  const columns = $derived(columnsFor(kind));
+  // The columns the user has not hidden (column chooser in the toolbar),
+  // and the sort, both remembered per kind.
+  const hidden = $derived(kindSettings(kind.id).hidden);
+  const columns = $derived(columnsFor(kind).filter((c) => !hidden.includes(c.key)));
   const template = $derived(["32px", ...columns.map((c) => c.width)].join(" "));
-  let sort = $state.raw<Sort | null>(null);
+  // svelte-ignore state_referenced_locally
+  let sort = $state.raw<Sort | null>(sortOf(kindSettings(kind.id)));
 
   // Re-evaluated when the rows, the filter, the sort, or (only when sorting by
   // a metric / age column) the metrics or clock change.
@@ -226,6 +232,7 @@
     if (sort?.key !== key) sort = { key, dir: "asc" };
     else if (sort.dir === "asc") sort = { key, dir: "desc" };
     else sort = null;
+    updateSettings({ kinds: { [kind.id]: withSort(kindSettings(kind.id), sort) } });
   }
 </script>
 
@@ -422,7 +429,7 @@
   }
   .btn.danger {
     border-color: var(--red);
-    color: #f5a3a5;
+    color: var(--error-text);
   }
   .td {
     padding: 0 10px;

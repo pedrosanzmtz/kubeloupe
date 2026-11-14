@@ -1,13 +1,16 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use crate::settings::SettingsStore;
 use crate::state::AppState;
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use tauri::Manager;
 use tauri_specta::{collect_commands, collect_events, Builder};
 
 mod commands;
 mod local_shell;
 mod log_streams;
+mod settings;
 #[cfg(unix)]
 mod shell_env;
 mod state;
@@ -58,7 +61,9 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::debug::cmd_debug_start,
             commands::debug::cmd_node_shell_start,
             commands::debug::cmd_node_shell_leftovers,
-            commands::debug::cmd_node_shell_cleanup
+            commands::debug::cmd_node_shell_cleanup,
+            commands::settings::cmd_get_settings,
+            commands::settings::cmd_update_settings
         ])
         .events(collect_events![
             commands::watch::WatchBatch,
@@ -116,15 +121,23 @@ fn main() {
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);
+            let path = app
+                .path()
+                .app_config_dir()
+                .ok()
+                .map(|d| d.join("settings.json"));
+            app.manage(SettingsStore::open(path));
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("error while building kubeloupe")
         .run(|app, event| {
-            // Kill the local shells and delete their temp kubeconfigs, and
-            // delete the pods of node shells.
             if let tauri::RunEvent::Exit = event {
-                use tauri::Manager;
+                // Write settings changed in the last moments before quitting.
+                if let Some(store) = app.try_state::<Arc<SettingsStore>>() {
+                    store.flush();
+                }
+                // Kill the local shells and delete their temp kubeconfigs.
                 state::stop_all_local_shells(&app.state::<AppState>());
                 delete_session_pods(app);
             }

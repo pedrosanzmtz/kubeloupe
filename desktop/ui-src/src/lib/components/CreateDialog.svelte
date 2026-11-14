@@ -338,7 +338,7 @@
     word-break: break-word;
   }
   .failed .message {
-    color: #f5a3a5;
+    color: var(--error-text);
   }
   .takeover {
     color: var(--amber);

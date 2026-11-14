@@ -30,6 +30,8 @@
  */
 
 import { mockIPC } from "@tauri-apps/api/mocks";
+import { applyPatch } from "../lib/settings";
+import type { SettingsPatch } from "../lib/settings";
 import { commands, events } from "../lib/bindings";
 import type {
   ApplyResult,
@@ -112,6 +114,8 @@ const sameResource = (a: ResourceRef, b: ResourceRef) =>
 /** A JSON copy, like an event payload over real IPC. */
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 const rowKey = (namespace: string, name: string) => (namespace ? `${namespace}/${name}` : name);
+/** Where the fake keeps the settings across reloads (the real app: a file). */
+export const SETTINGS_KEY = "kubeloupe-fake-settings";
 
 export function installFakeBackend(cluster: FakeCluster = defaultCluster()): FakeApi {
   const calls = new Map<CommandName, CallArgs[]>();
@@ -139,6 +143,12 @@ export function installFakeBackend(cluster: FakeCluster = defaultCluster()): Fak
   /** Running overview feeds, and the id of the latest one. */
   const overviewFeeds = new Set<number>();
   let lastOverview: number | null = null;
+  try {
+    const saved = sessionStorage.getItem(SETTINGS_KEY);
+    if (saved) cluster.settings = JSON.parse(saved) as FakeCluster["settings"];
+  } catch {
+    // Keep the defaults.
+  }
 
   function kindOf(resource: ResourceRef): ResourceKind {
     const kind = cluster.kinds.find((k) => sameResource(k.resource, resource));
@@ -491,6 +501,14 @@ export function installFakeBackend(cluster: FakeCluster = defaultCluster()): Fak
       return drainId;
     },
     cmdCancelDrain: () => null,
+
+    cmdGetSettings: () => copy(cluster.settings),
+    cmdUpdateSettings: (patch) => {
+      // The app sends whole values (`SettingsPatch`), like the backend expects.
+      cluster.settings = applyPatch(cluster.settings, patch as SettingsPatch);
+      sessionStorage.setItem(SETTINGS_KEY, JSON.stringify(cluster.settings));
+      return copy(cluster.settings);
+    },
   };
 
   const opened: string[] = [];
