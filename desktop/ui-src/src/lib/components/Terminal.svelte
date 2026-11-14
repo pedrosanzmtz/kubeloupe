@@ -1,20 +1,69 @@
+<script module lang="ts">
+  import { commands } from "../bindings";
+  import type { PodRef } from "../stores/detail.svelte";
+
+  /** A shell in a pod, or one on this machine pointed at `namespace`. */
+  export type TerminalTarget =
+    /** `container`: `null` lets the API server pick. */
+    | { kind: "pod"; pod: PodRef; container: string | null }
+    | { kind: "local"; namespace: string };
+
+  /** The session commands of a target. Both kinds stream through the
+   *  `exec-output` and `exec-closed` events. */
+  interface Backend {
+    /** The session id, and a note to show before the shell's output. */
+    start(cols: number, rows: number): Promise<{ id: string; intro: string }>;
+    input(id: string, data: string): Promise<unknown>;
+    resize(id: string, cols: number, rows: number): Promise<unknown>;
+    close(id: string): Promise<unknown>;
+  }
+
+  function backendFor(t: TerminalTarget): Backend {
+    if (t.kind === "pod") {
+      return {
+        start: async (cols, rows) => ({
+          id: await commands.cmdExecStart(t.pod.namespace, t.pod.name, t.container, cols, rows),
+          intro: "",
+        }),
+        input: commands.cmdExecInput,
+        resize: commands.cmdExecResize,
+        close: commands.cmdExecClose,
+      };
+    }
+    return {
+      start: async (cols, rows) => {
+        const s = await commands.cmdLocalShellStart(t.namespace, cols, rows);
+        return {
+          id: s.session,
+          intro:
+            `\x1b[90mLocal shell: kubectl uses context ${s.context}, namespace ${s.namespace}.\r\n` +
+            "Changing the app's namespace or context does not change this shell.\x1b[0m\r\n",
+        };
+      },
+      input: commands.cmdLocalShellInput,
+      resize: commands.cmdLocalShellResize,
+      close: commands.cmdLocalShellClose,
+    };
+  }
+</script>
+
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
   import "@xterm/xterm/css/xterm.css";
-  import { commands, events } from "../bindings";
-  import type { PodRef } from "../stores/detail.svelte";
+  import { events } from "../bindings";
 
   interface Props {
-    pod: PodRef;
-    /** Container to exec into; `null` lets the API server pick. */
-    container: string | null;
+    target: TerminalTarget;
     /** The shown dock tab: it gets the focus. Hidden tabs keep their session. */
     active?: boolean;
   }
 
-  let { pod, container, active = true }: Props = $props();
+  let { target, active = true }: Props = $props();
+
+  // Picked once: a tab's target never changes.
+  let backend: Backend | null = null;
 
   let host: HTMLDivElement;
   let term: Terminal | null = null;
@@ -23,7 +72,7 @@
   let resizeObserver: ResizeObserver | null = null;
   let unlisteners: (() => void)[] = [];
   let destroyed = false;
-  /** Output that arrived before `cmd_exec_start` told us our session id,
+  /** Output that arrived before the start command told us our session id,
    *  by session: other terminals are open too, so it is not all ours. */
   let early = new Map<string, string[]>();
   let closedEarly = new Set<string>();
@@ -36,7 +85,7 @@
     const size = `${term.cols}x${term.rows}`;
     if (size === lastSize) return;
     lastSize = size;
-    commands.cmdExecResize(session, term.cols, term.rows).catch(() => {});
+    backend?.resize(session, term.cols, term.rows).catch(() => {});
   }
 
   const closedNote = "\r\n\x1b[90m[session closed]\x1b[0m\r\n";
@@ -46,6 +95,8 @@
   });
 
   onMount(async () => {
+    const b = backendFor(target);
+    backend = b;
     const t = new Terminal({
       cursorBlink: true,
       fontSize: 12,
@@ -61,7 +112,7 @@
     resizeObserver = new ResizeObserver(() => sendResize());
     resizeObserver.observe(host);
 
-    // Output can arrive before cmd_exec_start resolves and `session` is set:
+    // Output can arrive before the start command resolves and `session` is set:
     // keep it by session until we know which one is ours.
     const un = await Promise.all([
       events.execOutput.listen((e) => {
@@ -87,19 +138,20 @@
 
     try {
       lastSize = `${t.cols}x${t.rows}`;
-      const id = await commands.cmdExecStart(pod.namespace, pod.name, container, t.cols, t.rows);
+      const { id, intro } = await b.start(t.cols, t.rows);
       if (destroyed) {
-        commands.cmdExecClose(id).catch(() => {});
+        b.close(id).catch(() => {});
         return;
       }
       session = id;
+      if (intro) t.write(intro);
       for (const data of early.get(id) ?? []) t.write(data);
       if (closedEarly.has(id)) t.write(closedNote);
       early = new Map();
       closedEarly = new Set();
       sendResize();
       t.onData((data) => {
-        commands.cmdExecInput(id, data).catch(() => {});
+        b.input(id, data).catch(() => {});
       });
       if (active) t.focus();
     } catch (e) {
@@ -111,7 +163,7 @@
     destroyed = true;
     resizeObserver?.disconnect();
     unlisteners.forEach((f) => f());
-    if (session) commands.cmdExecClose(session).catch(() => {});
+    if (session) backend?.close(session).catch(() => {});
     session = null;
     term?.dispose();
     term = null;

@@ -1,6 +1,7 @@
 //! Per-window state shared by the commands: the selected context, its
 //! client, and the running streams, sessions and watches.
 
+use crate::local_shell::LocalShell;
 use crate::log_streams::LogStreams;
 use kube::api::TerminalSize;
 use kube::Client;
@@ -45,6 +46,9 @@ pub(crate) struct AppState {
     pub(crate) log_streams: LogStreams,
     /// Open terminal sessions, by session id.
     pub(crate) exec_sessions: Mutex<HashMap<String, ExecSession>>,
+    /// Local shells (dock tabs), by session id. Dropping one kills the
+    /// shell and deletes its temp kubeconfig.
+    pub(crate) local_shells: Mutex<HashMap<String, LocalShell>>,
     /// Active port-forwards, by session id.
     pub(crate) forwards: Mutex<HashMap<String, ForwardSession>>,
     /// Running resource watchers, by watch id.
@@ -79,6 +83,15 @@ pub(crate) fn stop_all_exec(state: &State<'_, AppState>) {
     for (_, session) in sessions.drain() {
         session.task.abort();
     }
+}
+
+/// Kill every local shell and delete their temp kubeconfigs.
+pub(crate) fn stop_all_local_shells(state: &AppState) {
+    let shells: Vec<LocalShell> = {
+        let mut map = state.local_shells.lock().unwrap();
+        map.drain().map(|(_, s)| s).collect()
+    };
+    drop(shells);
 }
 
 pub(crate) fn stop_all_watches(state: &State<'_, AppState>) {

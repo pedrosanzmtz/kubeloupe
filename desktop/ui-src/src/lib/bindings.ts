@@ -79,6 +79,16 @@ export const commands = {
 	cmdExecResize: (session: string, cols: number, rows: number, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_exec_resize", { session, cols, rows }, options),
 	cmdExecClose: (session: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_exec_close", { session }, options),
 	/**
+	 *  Start the user's shell on this machine with `KUBECONFIG` pointing at a
+	 *  temp kubeconfig that selects the app's context and `namespace` (`null`:
+	 *  the context's own). The user's kubeconfig files are not changed.
+	 */
+	cmdLocalShellStart: (namespace: string | null, cols: number, rows: number, options?: InvokeOptions) => __TAURI_INVOKE<LocalShellStarted>("cmd_local_shell_start", { namespace, cols, rows }, options),
+	cmdLocalShellInput: (session: string, data: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_local_shell_input", { session, data }, options),
+	cmdLocalShellResize: (session: string, cols: number, rows: number, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_local_shell_resize", { session, cols, rows }, options),
+	/**  Kill the shell and delete its temp kubeconfig. */
+	cmdLocalShellClose: (session: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_local_shell_close", { session }, options),
+	/**
 	 *  Forward a pod port to localhost. Returns the session id and the local
 	 *  port the forward listens on.
 	 */
@@ -423,6 +433,16 @@ export type FieldTakeover = {
 	manager: string,
 	/**  Field paths, as the API server reports them (e.g. ".spec.replicas"). */
 	fields: string[],
+};
+
+/**
+ *  A started local shell: its session id, and the context and namespace
+ *  kubectl uses in it.
+ */
+export type LocalShellStarted = {
+	session: string,
+	context: string,
+	namespace: string,
 };
 
 /**  A container (regular or init) whose logs can be read. */

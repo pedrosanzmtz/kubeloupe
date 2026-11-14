@@ -12,6 +12,7 @@ import { openDetail } from "./detail.svelte";
 import { dockMenuFor } from "../dock";
 import { dock, openDockTab, toggleDock } from "./dock.svelte";
 import { activeTable, openHelp } from "./keyboard.svelte";
+import { openLocalShell } from "./localShell";
 import { whenDiscarded } from "./unsaved.svelte";
 
 /** Ids of recently run entries, newest first (this session). */
@@ -31,6 +32,14 @@ export function paletteItems(): PaletteItem[] {
     { id: "cmd:overview", group: "Command", label: "Go to Overview", run: () => setView("overview") },
     { id: "cmd:refresh", group: "Command", label: "Refresh", terms: ["reload"], run: refresh },
     { id: "cmd:help", group: "Command", label: "Keyboard shortcuts", terms: ["help", "keys"], run: openHelp },
+    {
+      id: "cmd:local-shell",
+      group: "Command",
+      label: "New local terminal",
+      detail: "kubectl at this context and namespace",
+      terms: ["shell", "terminal", "kubectl", "console", "local"],
+      run: openLocalShell,
+    },
   ];
   if (dock.tabs.length > 0) {
     items.push({

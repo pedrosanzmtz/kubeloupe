@@ -37,6 +37,15 @@ Svelte) and a CLI, both built on the same Rust core.
   views. Open them from a panel or the right-click menu (Logs, Shell); drag
   the top edge to resize, double-click a tab to maximize, Ctrl+` to hide or
   show it. At most 10 log streams run at once.
+- **Local terminal** (Ctrl+Shift+`, the dock's `+` or "New local terminal"
+  in the palette): your own shell (`$SHELL -l`; on Windows `pwsh`,
+  `powershell` or `cmd`) in your home directory, with `kubectl` and `helm`
+  already pointed at the app's context and namespace. The app writes a small
+  temp kubeconfig (mode 0600) with just that context entry and puts it first
+  in `KUBECONFIG`, so your own kubeconfig files are never changed; the file
+  is deleted when the tab closes or the app exits. The tab shows
+  `<context> · <namespace>`; changing the app's namespace later does not
+  change shells that are already open.
 - **YAML editor** with server-side apply. After saving, it tells you which
   fields it took over from other field managers (for example from
   `kubectl` or a controller). Secret values stay hidden until you reveal them.

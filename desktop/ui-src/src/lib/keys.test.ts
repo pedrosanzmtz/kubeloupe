@@ -60,6 +60,12 @@ describe("bindingFor", () => {
     expect(command(press("`"))).toBeNull();
   });
 
+  it("opens a local terminal with Ctrl+Shift+` (the event's key is ~)", () => {
+    expect(command(press("~", { ctrlKey: true, shiftKey: true }))).toBe("newLocalShell");
+    expect(command(press("~", { ctrlKey: true, shiftKey: true }), true)).toBe("newLocalShell");
+    expect(command(press("~", { shiftKey: true }))).toBeNull();
+  });
+
   it("leaves Space with Shift alone", () => {
     expect(command(press(" "))).toBe("toggleRow");
     expect(command(press(" ", { shiftKey: true }))).toBeNull();

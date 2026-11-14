@@ -17,6 +17,7 @@ export type Command =
   | "deleteRows"
   | "detailTab"
   | "toggleDock"
+  | "newLocalShell"
   | "escape";
 
 export interface Key {
@@ -104,6 +105,16 @@ export const KEYMAP: Binding[] = [
     inInputs: true,
     // Like an editor's terminal panel: the one key a shell gives up, so the
     // dock can be hidden from inside it. Ctrl+` would only send a NUL byte.
+    inTerminal: true,
+  },
+  {
+    command: "newLocalShell",
+    // Shift+` types `~` on a US layout, so that is the key the event has.
+    keys: [{ key: "~", ctrl: true, shift: true }],
+    display: ["Ctrl+Shift+`"],
+    label: "New local terminal (kubectl on this machine, at the app's context and namespace)",
+    group: "General",
+    inInputs: true,
     inTerminal: true,
   },
 ];
