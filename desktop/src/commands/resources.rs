@@ -20,6 +20,22 @@ pub(crate) async fn cmd_get_resource_detail(
         .map_err(|e| e.to_string())
 }
 
+/// The per-kind summary and related objects of any object (a Deployment's
+/// ReplicaSets and pods, a Service's endpoints, the pods on a Node...).
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn cmd_get_related(
+    state: State<'_, AppState>,
+    resource: ResourceRef,
+    namespace: String,
+    name: String,
+) -> Result<resources::Related, String> {
+    let client = client(&state).await?;
+    resources::get_related(&client, &resource, &namespace, &name)
+        .await
+        .map_err(|e| actions::describe_error(&e))
+}
+
 /// An object as YAML. Secret values stay hidden unless `reveal` is set.
 #[tauri::command]
 #[specta::specta]

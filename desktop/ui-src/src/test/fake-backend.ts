@@ -40,6 +40,7 @@ import type {
   WatchState,
 } from "../lib/bindings";
 import { defaultCluster, detail, NO_POD } from "./fixtures/cluster";
+import { NO_RELATED } from "./fixtures/related";
 import type { FakeCluster } from "./fixtures/cluster";
 
 type Commands = typeof commands;
@@ -235,6 +236,11 @@ export function installFakeBackend(cluster: FakeCluster = defaultCluster()): Fak
     cmdPortforwardStop: () => null,
 
     cmdGetResourceDetail: (resource, namespace, name) => detailOf(resource, namespace, name),
+    cmdGetRelated: (resource, namespace, name) => {
+      const { kind, row } = findRow(resource, namespace, name);
+      // A copy, like real IPC: tests change the fixture in place.
+      return structuredClone(cluster.related[`${kind.id}|${row.key}`] ?? NO_RELATED);
+    },
     cmdGetResourceYaml: (resource, namespace, name, reveal) => {
       const { kind, row } = findRow(resource, namespace, name);
       const key = `${kind.id}|${row.key}`;
