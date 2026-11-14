@@ -41,6 +41,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::portforward::cmd_portforward_list,
             commands::portforward::cmd_service_ports,
             commands::resources::cmd_get_resource_detail,
+            commands::resources::cmd_get_related,
             commands::resources::cmd_get_resource_yaml,
             commands::resources::cmd_apply_resource_yaml,
             commands::resources::cmd_delete_resource,

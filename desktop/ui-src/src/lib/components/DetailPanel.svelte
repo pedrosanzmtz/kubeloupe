@@ -8,11 +8,13 @@
   import LogViewer from "./LogViewer.svelte";
   import MetaSection from "./MetaSection.svelte";
   import PortForward from "./PortForward.svelte";
+  import RelatedGroups from "./RelatedGroups.svelte";
   import Terminal from "./Terminal.svelte";
   import YamlEditor from "./YamlEditor.svelte";
   import { closeDetail } from "../stores/detail.svelte";
   import type { Target } from "../stores/detail.svelte";
   import { LiveDetail } from "../stores/live-detail.svelte";
+  import { LiveRelated } from "../stores/related.svelte";
 
   /** The pod panel: the generic overview plus the pod section (containers,
    *  QoS, IPs...), logs, terminal and port-forward, and the YAML editor.
@@ -25,11 +27,24 @@
   const live = new LiveDetail(target);
   const info = $derived(live.info);
   const extras = $derived(info?.pod ?? null);
+  /** The Services that select the pod and the ConfigMaps, Secrets and PVCs
+   *  it uses. */
+  // svelte-ignore state_referenced_locally
+  const related = new LiveRelated(target);
+  $effect(() => {
+    if (live.info) related.seen(live.info);
+  });
   let terminalOpen = $state(false);
   let portForward: PortForward | undefined = $state();
 
-  onMount(() => void live.start());
-  onDestroy(() => live.stop());
+  onMount(() => {
+    void live.start();
+    void related.refresh();
+  });
+  onDestroy(() => {
+    live.stop();
+    related.stop();
+  });
 
   /** The terminal opens in the first regular container. */
   const shellContainer = $derived(extras?.containers.find((c) => c.kind === "regular")?.name ?? null);
@@ -84,6 +99,7 @@
         <p class="muted">No containers.</p>
       {/each}
 
+      <RelatedGroups {related} />
       <ConditionsTable conditions={info.conditions} />
       <EventsTable events={info.events} />
     {/if}

@@ -4,7 +4,9 @@
   import ConditionsTable from "./ConditionsTable.svelte";
   import DetailNotices from "./DetailNotices.svelte";
   import EventsTable from "./EventsTable.svelte";
+  import KindSummary from "./KindSummary.svelte";
   import MetaSection from "./MetaSection.svelte";
+  import RelatedGroups from "./RelatedGroups.svelte";
   import YamlEditor from "./YamlEditor.svelte";
   import LogViewer from "./LogViewer.svelte";
   import ServicePorts from "./ServicePorts.svelte";
@@ -12,6 +14,7 @@
   import { closeDetail } from "../stores/detail.svelte";
   import type { Target } from "../stores/detail.svelte";
   import { LiveDetail } from "../stores/live-detail.svelte";
+  import { LiveRelated } from "../stores/related.svelte";
 
   /** Detail panel for any kind without a dedicated one (pods have their own). */
   let { target }: { target: Target } = $props();
@@ -20,6 +23,17 @@
   // svelte-ignore state_referenced_locally
   const live = new LiveDetail(target);
   const info = $derived(live.info);
+  // svelte-ignore state_referenced_locally
+  const related = new LiveRelated(target);
+  /** Kinds without related objects (a CRD, a Lease) show none of it. */
+  const hasRelated = $derived.by(() => {
+    const d = related.data;
+    return !!d && (d.summary.length > 0 || d.facts.length > 0 || d.groups.length > 0);
+  });
+  // Reload the related objects when the live detail reports a change.
+  $effect(() => {
+    if (live.info) related.seen(live.info);
+  });
 
   /** Workloads get a Logs tab with their pods' logs merged. */
   const isWorkload = $derived(
@@ -34,8 +48,14 @@
   ]);
   let tab = $state("overview");
 
-  onMount(() => void live.start());
-  onDestroy(() => live.stop());
+  onMount(() => {
+    void live.start();
+    void related.refresh();
+  });
+  onDestroy(() => {
+    live.stop();
+    related.stop();
+  });
 
   const title = $derived(target.namespace ? `${target.namespace}/${target.name}` : target.name);
 </script>
@@ -68,6 +88,7 @@
       {:else if !info}
         <p class="muted">Loading…</p>
       {:else}
+        {#if hasRelated}<KindSummary {related} />{/if}
         <MetaSection {info} />
         {#if target.resource.group === "" && target.resource.kind === "Service"}
           <ServicePorts namespace={target.namespace} name={target.name} disabled={live.deleted} />
@@ -83,6 +104,7 @@
           </ul>
         {/if}
 
+        <RelatedGroups {related} />
         <ConditionsTable conditions={info.conditions} />
         <EventsTable events={info.events} />
       {/if}

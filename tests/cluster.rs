@@ -2007,3 +2007,244 @@ async fn detail_watch_sends_updates_and_deleted() -> Result<()> {
     })
     .await
 }
+
+// ---------------------------------------------------------------------------
+// Related objects (#35).
+// ---------------------------------------------------------------------------
+
+/// The group titled `title`, failing if it is missing or could not load.
+fn related_group<'a>(
+    related: &'a resources::Related,
+    title: &str,
+) -> Result<&'a resources::RelatedGroup> {
+    let g = related
+        .groups
+        .iter()
+        .find(|g| g.title == title)
+        .with_context(|| format!("no {title} group in {related:?}"))?;
+    ensure!(g.error.is_empty(), "{title}: {}", g.error);
+    Ok(g)
+}
+
+fn related_names(g: &resources::RelatedGroup) -> Vec<String> {
+    g.items.iter().map(|i| i.name.clone()).collect()
+}
+
+#[tokio::test]
+#[ignore]
+async fn related_deployment_lists_its_replicaset_and_pods() -> Result<()> {
+    let client = connect().await?;
+    let kind = kind_named(&client, "deployment").await?;
+    let related = within(
+        "related of demo/web",
+        TIMEOUT,
+        resources::get_related(&client, &kind.resource, "demo", "web"),
+    )
+    .await?;
+    ensure!(
+        related
+            .summary
+            .first()
+            .is_some_and(|s| s.ends_with(" ready")),
+        "{:?}",
+        related.summary
+    );
+    ensure!(
+        related.summary.iter().any(|s| s.starts_with("revision ")),
+        "{:?}",
+        related.summary
+    );
+    let rs = related_group(&related, "ReplicaSets")?;
+    ensure!(rs.kind == "ReplicaSet" && rs.api_version == "apps/v1");
+    ensure!(
+        !rs.items.is_empty() && rs.items.iter().all(|i| i.name.starts_with("web-")),
+        "{rs:?}"
+    );
+    let pods = related_group(&related, "Pods")?;
+    let names = related_names(pods);
+    ensure!(names.len() >= 2, "{names:?}");
+    // Only the Deployment's own pods, and each one under its ReplicaSet's name.
+    ensure!(
+        names.iter().all(|n| rs
+            .items
+            .iter()
+            .any(|r| n.starts_with(&format!("{}-", r.name)))),
+        "{names:?} vs {rs:?}"
+    );
+    ensure!(
+        related.facts.iter().any(|f| f.label == "Rollout"),
+        "{:?}",
+        related.facts
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore]
+async fn related_service_lists_its_pods_ports_and_endpoints() -> Result<()> {
+    in_temp_ns("kl-it-rel-svc", |client, ns| async move {
+        let pods: Api<Pod> = Api::namespaced(client.clone(), &ns);
+        pods.create(&PostParams::default(), &sleeper_pod("backend"))
+            .await?;
+        // Not selected by the Service.
+        let mut other = sleeper_pod("other");
+        other.metadata.labels = Some([("app".to_string(), "else".to_string())].into());
+        pods.create(&PostParams::default(), &other).await?;
+
+        let svc: k8s_openapi::api::core::v1::Service = serde_json::from_value(serde_json::json!({
+            "apiVersion": "v1", "kind": "Service",
+            "metadata": { "name": "front" },
+            "spec": {
+                "selector": { "app": "it" },
+                "ports": [{ "name": "http", "port": 80, "targetPort": 8080 }]
+            }
+        }))?;
+        Api::<k8s_openapi::api::core::v1::Service>::namespaced(client.clone(), &ns)
+            .create(&PostParams::default(), &svc)
+            .await?;
+        wait_running(&client, &ns, "backend").await?;
+
+        let kind = kind_named(&client, "service").await?;
+        let related = eventually("the Service's EndpointSlice", TIMEOUT, || async {
+            let r = resources::get_related(&client, &kind.resource, &ns, "front").await?;
+            let slices = related_group(&r, "EndpointSlices")?;
+            Ok((!slices.items.is_empty()).then_some(r))
+        })
+        .await?;
+        let pods = related_group(&related, "Pods")?;
+        ensure!(related_names(pods) == ["backend"], "{pods:?}");
+        let ports = related_group(&related, "Ports")?;
+        ensure!(
+            ports.items[0].cells[..3] == ["http", "80", "8080"],
+            "{ports:?}"
+        );
+        // No Ingress routes to it.
+        ensure!(related_group(&related, "Ingresses")?.items.is_empty());
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+#[ignore]
+async fn related_node_lists_the_demo_pods_on_it() -> Result<()> {
+    let client = connect().await?;
+    let web = first_running_demo_pod(&client, "web-").await?;
+    let node = Api::<Pod>::namespaced(client.clone(), "demo")
+        .get(&web)
+        .await?
+        .spec
+        .and_then(|s| s.node_name)
+        .context("the demo pod has no node")?;
+    let kind = kind_named(&client, "node").await?;
+    let related = within(
+        "related of the node",
+        TIMEOUT,
+        resources::get_related(&client, &kind.resource, "", &node),
+    )
+    .await?;
+    let pods = related_group(&related, "Pods")?;
+    ensure!(
+        pods.items
+            .iter()
+            .any(|i| i.namespace == "demo" && i.name == web),
+        "{web} not in {:?}",
+        related_names(pods)
+    );
+    // Only this node's pods: every one of them reports this node.
+    let all = get_pods(&client, None).await?;
+    for item in &pods.items {
+        let p = all
+            .iter()
+            .find(|p| p.namespace == item.namespace && p.name == item.name);
+        ensure!(
+            p.is_none_or(|p| p.node == node),
+            "{}/{} is not on {node}",
+            item.namespace,
+            item.name
+        );
+    }
+    let alloc = related_group(&related, "Allocated resources")?;
+    ensure!(
+        alloc
+            .items
+            .iter()
+            .map(|i| i.cells[0].as_str())
+            .collect::<Vec<_>>()
+            == ["cpu", "memory", "pods"],
+        "{alloc:?}"
+    );
+    related_group(&related, "Taints")?;
+    ensure!(
+        related.summary.first().is_some_and(|s| s == "Ready"),
+        "{:?}",
+        related.summary
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore]
+async fn related_configmap_is_used_by_the_pod_that_mounts_it() -> Result<()> {
+    in_temp_ns("kl-it-rel-cm", |client, ns| async move {
+        let cm: ConfigMap = serde_json::from_value(serde_json::json!({
+            "apiVersion": "v1", "kind": "ConfigMap",
+            "metadata": { "name": "settings" },
+            "data": { "a": "1" }
+        }))?;
+        Api::<ConfigMap>::namespaced(client.clone(), &ns)
+            .create(&PostParams::default(), &cm)
+            .await?;
+        let pod: Pod = serde_json::from_value(serde_json::json!({
+            "apiVersion": "v1", "kind": "Pod",
+            "metadata": { "name": "reader" },
+            "spec": {
+                "terminationGracePeriodSeconds": 0,
+                "volumes": [{ "name": "cfg", "configMap": { "name": "settings" } }],
+                "containers": [{
+                    "name": "c", "image": "busybox:1.36", "command": ["sleep", "3600"],
+                    "volumeMounts": [{ "name": "cfg", "mountPath": "/cfg" }]
+                }]
+            }
+        }))?;
+        let pods: Api<Pod> = Api::namespaced(client.clone(), &ns);
+        pods.create(&PostParams::default(), &pod).await?;
+        // A pod that does not use it.
+        pods.create(&PostParams::default(), &sleeper_pod("bystander"))
+            .await?;
+
+        let cm_kind = kind_named(&client, "configmap").await?;
+        let related = within(
+            "related of the ConfigMap",
+            TIMEOUT,
+            resources::get_related(&client, &cm_kind.resource, &ns, "settings"),
+        )
+        .await?;
+        let used = related_group(&related, "Used by pods")?;
+        ensure!(related_names(used) == ["reader"], "{used:?}");
+        ensure!(
+            used.items[0]
+                .cells
+                .last()
+                .is_some_and(|c| c == "volume cfg"),
+            "{used:?}"
+        );
+        ensure!(related.summary == ["1 key"], "{:?}", related.summary);
+
+        // The reverse, in the pod's panel.
+        let from_pod = within(
+            "related of the pod",
+            TIMEOUT,
+            resources::get_related(&client, &pod_ref(), &ns, "reader"),
+        )
+        .await?;
+        let cms = related_group(&from_pod, "ConfigMaps")?;
+        // Besides `kube-root-ca.crt`, which the service account volume projects.
+        ensure!(
+            related_names(cms).contains(&"settings".to_string()),
+            "{cms:?}"
+        );
+        Ok(())
+    })
+    .await
+}
