@@ -29,9 +29,11 @@ use kubeloupe::resources::{
     list_resources, Category, ResourceKind,
 };
 use kubeloupe::watch::Update;
+use kubeloupe::watch::WatchState;
 use kubeloupe::{
-    apply_pod_yaml, client_for_context, exec_command, get_namespaces, get_nodes, get_pod_details,
-    get_pod_logs, get_pod_metrics, get_pod_yaml, get_pods, serve_port_forward, stream_pod_logs,
+    apply_pod_yaml, client_for_context, default_namespace, exec_command, get_namespaces, get_nodes,
+    get_overview, get_pod_details, get_pod_logs, get_pod_metrics, get_pod_yaml, get_pods,
+    is_forbidden, list_namespaces_if_allowed, serve_port_forward, stream_pod_logs,
     stream_workload_logs, LogOptions, WorkloadEvent, WorkloadKind,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -558,7 +560,7 @@ async fn discovery_finds_builtins_and_a_crd() -> Result<()> {
 
         // RBAC check answers for admin on the kind-cluster.
         let access =
-            resources::check_access(&client, &[widget.resource.clone(), kinds[0].resource.clone()])
+            resources::check_access(&client, &[widget.resource.clone(), kinds[0].resource.clone()], None)
                 .await;
         ensure!(
             access.len() == 2 && access.iter().all(|a| a.allowed),
@@ -1483,5 +1485,176 @@ async fn drain_scenario(client: &Client, ns: &str, node: &str) -> Result<()> {
     )
     .await?;
     ensure!(summary.complete() && summary.evicted == 1, "{summary:?}");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// A namespace-scoped user (scripts/test-cluster/limited-user.sh): `edit` in
+// team-a only. These tests skip unless KUBELOUPE_LIMITED_KUBECONFIG points
+// at the kubeconfig that script writes.
+// ---------------------------------------------------------------------------
+
+const LIMITED_NS: &str = "team-a";
+
+/// A client for the limited user, or `None` (skip) when not configured.
+async fn connect_limited() -> Result<Option<Client>> {
+    let Ok(path) = std::env::var("KUBELOUPE_LIMITED_KUBECONFIG") else {
+        eprintln!("KUBELOUPE_LIMITED_KUBECONFIG not set; skipping");
+        return Ok(None);
+    };
+    let kubeconfig = kube::config::Kubeconfig::read_from(&path)
+        .with_context(|| format!("cannot read {path}"))?;
+    let mut config = kube::Config::from_custom_kubeconfig(kubeconfig, &Default::default()).await?;
+    // As client_for_context: never tunnel the local cluster through an
+    // environment proxy.
+    config.proxy_url = None;
+    Ok(Some(Client::try_from(config)?))
+}
+
+#[tokio::test]
+#[ignore]
+async fn limited_user_access_is_checked_per_namespace() -> Result<()> {
+    let Some(client) = connect_limited().await? else {
+        return Ok(());
+    };
+    let pods = kind_named(&client, "pods").await?.resource;
+    let deployments = kind_named(&client, "deployments").await?.resource;
+    let nodes = kind_named(&client, "nodes").await?.resource;
+    let kinds = [pods.clone(), deployments.clone(), nodes.clone()];
+    let allowed = |access: &[resources::AccessResult], r: &resources::ResourceRef| {
+        access.iter().find(|a| a.id == r.id()).map(|a| a.allowed)
+    };
+
+    let in_ns = within("check_access(team-a)", TIMEOUT, async {
+        Ok(resources::check_access(&client, &kinds, Some(LIMITED_NS)).await)
+    })
+    .await?;
+    ensure!(allowed(&in_ns, &pods) == Some(true), "{in_ns:?}");
+    ensure!(allowed(&in_ns, &deployments) == Some(true), "{in_ns:?}");
+    // Cluster-scoped: the namespace does not help.
+    ensure!(allowed(&in_ns, &nodes) == Some(false), "{in_ns:?}");
+
+    let all = within("check_access(all)", TIMEOUT, async {
+        Ok(resources::check_access(&client, &kinds, None).await)
+    })
+    .await?;
+    ensure!(all.iter().all(|a| !a.allowed), "{all:?}");
+
+    let other = within("check_access(default)", TIMEOUT, async {
+        Ok(resources::check_access(&client, &kinds, Some("default")).await)
+    })
+    .await?;
+    ensure!(allowed(&other, &pods) == Some(false), "{other:?}");
+
+    // Starts on its own namespace, and cannot list namespaces.
+    ensure!(default_namespace(&client).await.as_deref() == Some(LIMITED_NS));
+    ensure!(list_namespaces_if_allowed(&client).await?.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore]
+async fn limited_user_lists_pods_in_its_namespace_only() -> Result<()> {
+    let Some(client) = connect_limited().await? else {
+        return Ok(());
+    };
+    let pods = within(
+        "get_pods(team-a)",
+        TIMEOUT,
+        get_pods(&client, Some(LIMITED_NS)),
+    )
+    .await?;
+    ensure!(pods.iter().all(|p| p.namespace == LIMITED_NS), "{pods:?}");
+    let all = tokio::time::timeout(TIMEOUT, get_pods(&client, None)).await?;
+    match all {
+        Err(e) => ensure!(is_forbidden(&e), "expected a 403, got {e:#}"),
+        Ok(p) => bail!("listing pods cluster-wide should be forbidden, got {p:?}"),
+    }
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore]
+async fn limited_user_gets_a_partial_overview() -> Result<()> {
+    let Some(client) = connect_limited().await? else {
+        return Ok(());
+    };
+    let ov = within("overview", TIMEOUT, get_overview(&client, None)).await?;
+    let pods = ov.pods.as_ref().context("pods missing from the overview")?;
+    ensure!(pods.namespace.as_deref() == Some(LIMITED_NS), "{ov:?}");
+    ensure!(
+        pods.by_namespace.iter().all(|(ns, _)| ns == LIMITED_NS),
+        "{ov:?}"
+    );
+    let events = ov.events.as_ref().context("events missing")?;
+    ensure!(events.namespace.as_deref() == Some(LIMITED_NS), "{ov:?}");
+    ensure!(ov.nodes.is_none() && ov.namespaces.is_none(), "{ov:?}");
+    ensure!(ov.notes.len() >= 3, "{:?}", ov.notes);
+
+    // An explicit namespace the user has no access to: pods are left out,
+    // the call still succeeds.
+    let ov = within(
+        "overview(default)",
+        TIMEOUT,
+        get_overview(&client, Some("default")),
+    )
+    .await?;
+    ensure!(ov.pods.is_none() && ov.events.is_none(), "{ov:?}");
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore]
+async fn limited_user_forbidden_watch_stops() -> Result<()> {
+    let Some(client) = connect_limited().await? else {
+        return Ok(());
+    };
+    let pods = kind_named(&client, "pods").await?;
+
+    // In its namespace: the watch goes live.
+    let (_store, mut updates) = kubeloupe::watch::watch_resource(&client, &pods, Some(LIMITED_NS));
+    within("live watch in team-a", TIMEOUT, async {
+        while let Some(u) = updates.next().await {
+            match u {
+                Update::State(WatchState::Live) => return Ok(()),
+                Update::State(WatchState::Forbidden { error }) => bail!("forbidden: {error}"),
+                _ => {}
+            }
+        }
+        bail!("watch ended")
+    })
+    .await?;
+
+    // Across the cluster: one Forbidden, then the stream ends (no retries).
+    let (_store, updates) = kubeloupe::watch::watch_resource(&client, &pods, None);
+    let all: Vec<_> = within("forbidden watch ends", TIMEOUT, async {
+        Ok(updates.collect::<Vec<_>>().await)
+    })
+    .await?;
+    ensure!(
+        matches!(
+            all.as_slice(),
+            [
+                Update::State(WatchState::Connecting),
+                Update::State(WatchState::Forbidden { .. })
+            ]
+        ),
+        "{all:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore]
+async fn admin_sees_everything_unscoped() -> Result<()> {
+    let client = connect().await?;
+    ensure!(default_namespace(&client).await.is_none());
+    ensure!(list_namespaces_if_allowed(&client).await?.is_some());
+    let ov = within("overview", TIMEOUT, get_overview(&client, None)).await?;
+    ensure!(ov.notes.is_empty(), "{:?}", ov.notes);
+    ensure!(ov.namespaces.is_some() && ov.nodes.is_some(), "{ov:?}");
+    let pods = ov.pods.context("pods")?;
+    ensure!(pods.namespace.is_none() && pods.total > 0);
+    ensure!(ov.events.context("events")?.namespace.is_none());
     Ok(())
 }

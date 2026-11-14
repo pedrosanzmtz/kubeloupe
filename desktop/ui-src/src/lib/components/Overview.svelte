@@ -3,6 +3,7 @@
   import { commands } from "../bindings";
   import type { Overview } from "../bindings";
   import { app, setStatus, showError, stamp } from "../stores/app.svelte";
+  import { clusterError } from "../clusterError";
 
   /** The overview is not watched; it re-requests itself while it is open. */
   const REFRESH_MS = 30_000;
@@ -12,21 +13,28 @@
   async function load() {
     showError("");
     try {
-      const ov = await commands.cmdGetOverview();
+      // Parts the user may not see cluster-wide fall back to this namespace.
+      const ov = await commands.cmdGetOverview(app.namespace || null);
       setStatus(true, "Connected");
       overview = ov;
-      app.count = `${ov.pods_total} pods, ${ov.nodes} nodes`;
+      const counts = [];
+      if (ov.pods) counts.push(`${ov.pods.total} pods`);
+      if (ov.nodes) counts.push(`${ov.nodes.total} nodes`);
+      app.count = counts.join(", ");
       stamp();
     } catch (e) {
-      setStatus(false, "Cluster unreachable");
-      showError("Could not reach the cluster: " + e);
+      const err = clusterError(e);
+      setStatus(false, err.status);
+      showError(err.message);
       overview = null;
     }
   }
 
   // Runs on mount and whenever the Refresh button or a context switch bumps the nonce.
+  // The namespace matters only to users who cannot see the whole cluster.
   $effect(() => {
     void app.refreshNonce;
+    void app.namespace;
     load();
   });
 
@@ -38,47 +46,68 @@
 
 <div class="overview">
   {#if overview}
+    {@const pods = overview.pods}
+    {#if overview.notes.length > 0}
+      <ul class="notes muted">
+        {#each overview.notes as note (note)}
+          <li>{note}</li>
+        {/each}
+      </ul>
+    {/if}
     <div class="cards">
-      <div class="card">
-        <div class="num">{overview.namespaces}</div>
-        <div class="label">Namespaces</div>
-      </div>
-      <div class="card">
-        <div class="num">{overview.nodes_ready}/{overview.nodes}</div>
-        <div class="label">Nodes ready</div>
-      </div>
-      <div class="card">
-        <div class="num">{overview.pods_total}</div>
-        <div class="label">Pods</div>
-      </div>
-      <div class="card">
-        <div class="num">{overview.pods_running}</div>
-        <div class="label">Running</div>
-      </div>
-      <div class="card">
-        <div class="num">{overview.pods_pending}</div>
-        <div class="label">Pending</div>
-      </div>
-      <div class="card">
-        <div class="num">{overview.pods_failed}</div>
-        <div class="label">Failed</div>
-      </div>
+      {#if overview.namespaces !== null}
+        <div class="card">
+          <div class="num">{overview.namespaces}</div>
+          <div class="label">Namespaces</div>
+        </div>
+      {/if}
+      {#if overview.nodes}
+        <div class="card">
+          <div class="num">{overview.nodes.ready}/{overview.nodes.total}</div>
+          <div class="label">Nodes ready</div>
+        </div>
+      {/if}
+      {#if pods}
+        {@const scope = pods.namespace ? ` in ${pods.namespace}` : ""}
+        <div class="card">
+          <div class="num">{pods.total}</div>
+          <div class="label">Pods{scope}</div>
+        </div>
+        <div class="card">
+          <div class="num">{pods.running}</div>
+          <div class="label">Running</div>
+        </div>
+        <div class="card">
+          <div class="num">{pods.pending}</div>
+          <div class="label">Pending</div>
+        </div>
+        <div class="card">
+          <div class="num">{pods.failed}</div>
+          <div class="label">Failed</div>
+        </div>
+      {/if}
     </div>
     <div class="sections">
       <section>
         <h3>Pods by namespace</h3>
-        <table>
-          <thead><tr><th>Namespace</th><th>Pods</th></tr></thead>
-          <tbody>
-            {#each overview.pods_by_namespace as [ns, n] (ns)}
-              <tr><td>{ns}</td><td>{n}</td></tr>
-            {/each}
-          </tbody>
-        </table>
+        {#if pods}
+          <table>
+            <thead><tr><th>Namespace</th><th>Pods</th></tr></thead>
+            <tbody>
+              {#each pods.by_namespace as [ns, n] (ns)}
+                <tr><td>{ns}</td><td>{n}</td></tr>
+              {/each}
+            </tbody>
+          </table>
+        {:else}
+          <p class="muted">Not allowed.</p>
+        {/if}
       </section>
       <section>
-        <h3>Recent events</h3>
-        {#each overview.events as e, i (i)}
+        <h3>
+          Recent events{overview.events?.namespace ? ` in ${overview.events.namespace}` : ""}
+        </h3>
+        {#each overview.events?.items ?? [] as e, i (i)}
           <div class="event" class:warning={e.kind === "Warning"}>
             <span class="age">{e.age}</span>
             <span class="reason">{e.reason}</span>
@@ -86,7 +115,7 @@
             <span class="message">{e.message}{e.count > 1 ? ` (x${e.count})` : ""}</span>
           </div>
         {:else}
-          <p class="muted">No events.</p>
+          <p class="muted">{overview.events ? "No events." : "Not allowed."}</p>
         {/each}
       </section>
     </div>
@@ -104,6 +133,11 @@
     grid-template-columns: repeat(6, 1fr);
     gap: 12px;
     margin-bottom: 20px;
+  }
+  .notes {
+    margin: 0 0 16px;
+    padding-left: 18px;
+    font-size: 12px;
   }
   .card {
     background: var(--bg-raised);

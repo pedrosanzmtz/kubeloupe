@@ -6,6 +6,8 @@ use std::sync::Mutex;
 use tauri_specta::{collect_commands, collect_events, Builder};
 
 mod commands;
+#[cfg(unix)]
+mod shell_env;
 mod state;
 
 /// The typed command and event registry. Also used to generate
@@ -23,6 +25,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::logs::cmd_stop_workload_logs,
             commands::logs::cmd_save_logs,
             commands::cluster::cmd_get_overview,
+            commands::cluster::cmd_default_namespace,
             commands::cluster::cmd_get_metrics,
             commands::watch::cmd_watch_start,
             commands::watch::cmd_watch_stop,
@@ -70,6 +73,10 @@ fn export_bindings(builder: &Builder<tauri::Wry>) {
 }
 
 fn main() {
+    // First, before any thread starts: it changes the process environment.
+    #[cfg(unix)]
+    shell_env::import_login_shell_env();
+
     let builder = specta_builder();
     #[cfg(debug_assertions)]
     export_bindings(&builder);

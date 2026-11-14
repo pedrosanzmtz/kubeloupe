@@ -3,7 +3,7 @@
 
 use kube::api::TerminalSize;
 use kube::Client;
-use kubeloupe::client_for_context;
+use kubeloupe::client_for_context_with;
 use kubeloupe::resources::ResourceKind;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -66,7 +66,8 @@ pub(crate) async fn client(state: &State<'_, AppState>) -> Result<Client, String
         return Ok(c.clone());
     }
     let ctx = selected_context(state);
-    let c = client_for_context(ctx.as_deref())
+    // A GUI can't answer an exec plugin's prompts.
+    let c = client_for_context_with(ctx.as_deref(), false)
         .await
         .map_err(|e| e.to_string())?;
     *slot = Some(c.clone());
