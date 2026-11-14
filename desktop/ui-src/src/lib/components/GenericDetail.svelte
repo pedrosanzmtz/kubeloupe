@@ -8,10 +8,10 @@
   import MetaSection from "./MetaSection.svelte";
   import RelatedGroups from "./RelatedGroups.svelte";
   import YamlEditor from "./YamlEditor.svelte";
-  import LogViewer from "./LogViewer.svelte";
   import ServicePorts from "./ServicePorts.svelte";
-  import { WORKLOAD_KINDS } from "../logs";
+  import { isWorkloadResource } from "../dock";
   import { closeDetail } from "../stores/detail.svelte";
+  import { openDockTab } from "../stores/dock.svelte";
   import { registerTabs } from "../stores/keyboard.svelte";
   import type { Target } from "../stores/detail.svelte";
   import { LiveDetail } from "../stores/live-detail.svelte";
@@ -36,15 +36,11 @@
     if (live.info) related.seen(live.info);
   });
 
-  /** Workloads get a Logs tab with their pods' logs merged. */
-  const isWorkload = $derived(
-    (target.resource.group === "apps" || target.resource.group === "batch") &&
-      WORKLOAD_KINDS.includes(target.resource.kind),
-  );
+  /** Workloads get a Logs button: their pods' logs, merged, in a dock tab. */
+  const isWorkload = $derived(isWorkloadResource(target.resource));
   const workload = $derived({ kind: target.resource.kind, namespace: target.namespace, name: target.name });
   const tabs = $derived([
     { id: "overview", label: "Overview" },
-    ...(isWorkload ? [{ id: "logs", label: "Logs" }] : []),
     { id: "yaml", label: "YAML" },
   ]);
   let tab = $state("overview");
@@ -82,6 +78,14 @@
         onclick={() => (tab = t.id)}>{t.label}</button
       >
     {/each}
+    {#if isWorkload}
+      <button
+        type="button"
+        class="btn dock-logs"
+        title="Opens the merged logs of its pods in the dock below"
+        onclick={() => openDockTab({ type: "workloadLogs", workload })}>Logs</button
+      >
+    {/if}
   </div>
 
   {#if tab === "overview"}
@@ -112,8 +116,6 @@
         <EventsTable events={info.events} />
       {/if}
     </div>
-  {:else if tab === "logs" && isWorkload}
-    <LogViewer {workload} />
   {:else if tab === "yaml"}
     <YamlEditor {target} />
   {/if}
@@ -161,7 +163,7 @@
     padding: 0 12px;
     border-bottom: 1px solid var(--border);
   }
-  .tabs button {
+  .tabs button[role="tab"] {
     background: transparent;
     border: none;
     border-bottom: 2px solid transparent;
@@ -170,9 +172,13 @@
     font-size: 13px;
     cursor: pointer;
   }
-  .tabs button.active {
+  .tabs button[role="tab"].active {
     color: var(--text);
     border-bottom-color: var(--accent);
+  }
+  .tabs .dock-logs {
+    margin: 4px 0 4px auto;
+    align-self: center;
   }
   .body {
     padding: 12px 16px;

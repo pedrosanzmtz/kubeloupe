@@ -2,6 +2,7 @@ import { commands } from "../bindings";
 import type { ContextInfo, NamespaceInfo, ResourceKind } from "../bindings";
 import { joinNames, normalizeNamespaces, sameNamespaces } from "../namespaces";
 import { closeDetail, detail, openDetail } from "./detail.svelte";
+import { closeAllDockTabs } from "./dock.svelte";
 import { whenDiscarded } from "./unsaved.svelte";
 
 /** `"overview"`, or the id of a discovered kind (`apps/v1/deployments`). */
@@ -229,6 +230,8 @@ export async function switchContext(name: string) {
     showError("Could not switch context: " + e);
     return;
   }
+  // The backend has stopped every stream and session of the old context.
+  closeAllDockTabs();
   closeDetail();
   app.selectedNamespaces = [];
   app.view = "overview";

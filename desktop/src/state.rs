@@ -1,6 +1,7 @@
 //! Per-window state shared by the commands: the selected context, its
 //! client, and the running streams, sessions and watches.
 
+use crate::log_streams::LogStreams;
 use kube::api::TerminalSize;
 use kube::Client;
 use kubeloupe::client_for_context_with;
@@ -39,9 +40,8 @@ pub(crate) struct AppState {
     /// Client for the selected context, built lazily and dropped when the
     /// context changes. `Client` is cheap to clone.
     pub(crate) client: tokio::sync::Mutex<Option<Client>>,
-    /// The running log stream, if any.
-    /// The running log stream (pod or workload), with its stream id.
-    pub(crate) log_task: Mutex<Option<(u64, tauri::async_runtime::JoinHandle<()>)>>,
+    /// Running log streams (pod and workload), by stream id.
+    pub(crate) log_streams: LogStreams,
     /// Open terminal sessions, by session id.
     pub(crate) exec_sessions: Mutex<HashMap<String, ExecSession>>,
     /// Active port-forwards, by session id.
@@ -71,23 +71,6 @@ pub(crate) async fn client(state: &State<'_, AppState>) -> Result<Client, String
         .map_err(|e| e.to_string())?;
     *slot = Some(c.clone());
     Ok(c)
-}
-
-pub(crate) fn stop_log_stream(state: &State<'_, AppState>) {
-    if let Some((_, handle)) = state.log_task.lock().unwrap().take() {
-        handle.abort();
-    }
-}
-
-/// Stop the log stream only if it is still `stream_id` (another viewer may
-/// have replaced it since).
-pub(crate) fn stop_log_stream_if(state: &State<'_, AppState>, stream_id: u64) {
-    let mut slot = state.log_task.lock().unwrap();
-    if matches!(slot.as_ref(), Some((id, _)) if *id == stream_id) {
-        if let Some((_, handle)) = slot.take() {
-            handle.abort();
-        }
-    }
 }
 
 pub(crate) fn stop_all_exec(state: &State<'_, AppState>) {

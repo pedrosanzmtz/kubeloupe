@@ -19,19 +19,17 @@ export const commands = {
 	 */
 	cmdCheckAccess: (kinds: ResourceRef[], namespace: string | null, options?: InvokeOptions) => __TAURI_INVOKE<AccessResult[]>("cmd_check_access", { kinds, namespace }, options),
 	cmdStreamPodLogs: (namespace: string, name: string, container: string | null, previous: boolean | null, tailLines: number | null, sinceSeconds: number | null, timestamps: boolean | null, streamId: number, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_stream_pod_logs", { namespace, name, container, previous, tailLines, sinceSeconds, timestamps, streamId }, options),
-	cmdStopPodLogs: (options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_stop_pod_logs", undefined, options),
+	/**
+	 *  Stop one log stream (pod or workload, with every per-pod task under it).
+	 *  Other streams keep running.
+	 */
+	cmdStopLogs: (streamId: number, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_stop_logs", { streamId }, options),
 	/**
 	 *  Follow the logs of all pods of a Deployment, StatefulSet, DaemonSet, Job
-	 *  or ReplicaSet (`kind` is case-insensitive). Replaces any running log
-	 *  stream; stopped by `cmd_stop_pod_logs`, `cmd_stop_workload_logs`, another
-	 *  log stream or a context switch.
+	 *  or ReplicaSet (`kind` is case-insensitive). Runs next to the other log
+	 *  streams (up to `MAX_LOG_STREAMS`) until `cmd_stop_logs` or a context switch.
 	 */
 	cmdStreamWorkloadLogs: (kind: string, namespace: string, name: string, options: WorkloadLogOptions_Deserialize, streamId: number, _options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_stream_workload_logs", { kind, namespace, name, options, streamId }, _options),
-	/**
-	 *  Stop a workload log stream (and every per-pod task under it), unless a
-	 *  newer stream has already replaced it.
-	 */
-	cmdStopWorkloadLogs: (streamId: number, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_stop_workload_logs", { streamId }, options),
 	/**
 	 *  Save log text to the user's Downloads folder and return the path. A
 	 *  webview Blob download is not reliable across the platforms Tauri targets
@@ -696,7 +694,8 @@ export type PodExtras = {
 
 /**
  *  A batch of log lines. Log events carry the id of the stream that produced
- *  them, so the UI can drop stragglers from a stream it has already replaced.
+ *  them: several streams run at once (one per dock tab), and a tab drops
+ *  stragglers from a stream it has already replaced.
  */
 export type PodLog = {
 	streamId: number,
