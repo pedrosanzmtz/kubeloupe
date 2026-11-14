@@ -142,6 +142,8 @@ test("the row menu opens from the keyboard and its items are reachable with arro
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Shift+F10");
   await expect(menu(page).locator(".title")).toHaveText("demo/crashed");
+  await expect(menu(page).getByRole("menuitem", { name: "Port forward…" })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
   await expect(menu(page).getByRole("menuitem", { name: "Delete", exact: true })).toBeFocused();
   await page.keyboard.press("ArrowDown");
   await expect(menu(page).getByRole("menuitem", { name: "Force delete…" })).toBeFocused();

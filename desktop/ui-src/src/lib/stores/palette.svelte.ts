@@ -5,6 +5,7 @@
 import { replicasFromRow, targetLabel } from "../actions";
 import type { PaletteItem } from "../palette";
 import { pushRecent } from "../palette";
+import { PORT_FORWARDS_VIEW } from "../forwards";
 import { app, canOpenDenied, kinds, refresh, setView, switchContext, switchNamespace } from "./app.svelte";
 import { requestAction } from "./actions.svelte";
 import { openCreate } from "./create.svelte";
@@ -27,6 +28,13 @@ export function paletteItems(): PaletteItem[] {
   const items: PaletteItem[] = [
     { id: "cmd:create", group: "Command", label: "Create resource…", terms: ["new", "apply", "yaml"], run: openCreate },
     { id: "cmd:overview", group: "Command", label: "Go to Overview", run: () => setView("overview") },
+    {
+      id: "cmd:port-forwards",
+      group: "Command",
+      label: "Go to Port Forwards",
+      terms: ["forward", "tunnel"],
+      run: () => setView(PORT_FORWARDS_VIEW),
+    },
     { id: "cmd:refresh", group: "Command", label: "Refresh", terms: ["reload"], run: refresh },
     { id: "cmd:help", group: "Command", label: "Keyboard shortcuts", terms: ["help", "keys"], run: openHelp },
   ];
