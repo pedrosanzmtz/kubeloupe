@@ -66,6 +66,8 @@ export interface FakeApi {
   failNext(cmd: CommandName, error: string): void;
   /** Id of the most recent watch (`cmd_watch_start`), or null. */
   lastWatchId(): string | null;
+  /** The watches that were started and not stopped, oldest first. */
+  activeWatches(): { id: string; namespace: string | null }[];
   /** `streamId` of the most recent pod log stream, or null. */
   lastStreamId(): number | null;
   /** Send a `watch-batch`; `id` defaults to the latest watch. */
@@ -301,7 +303,10 @@ export function installFakeBackend(cluster: FakeCluster = defaultCluster()): Fak
       // Like the backend: the full list first, then "live". Sent after the
       // reply so the store knows the id (it also buffers early events).
       setTimeout(() => {
-        if (!namespace && cluster.deniedClusterWide.includes(kind.id)) {
+        const denied = namespace
+          ? cluster.deniedNamespaces.includes(namespace)
+          : cluster.deniedClusterWide.includes(kind.id);
+        if (denied) {
           // Like the backend: a 403 ends the watch with one "forbidden".
           void events.watchState.emit({ id, state: "forbidden", error: `${kind.resource.plural} is forbidden` });
           return;
@@ -477,6 +482,7 @@ export function installFakeBackend(cluster: FakeCluster = defaultCluster()): Fak
       failures.set(cmd, list);
     },
     lastWatchId: () => (watchSeq ? `watch-${watchSeq}` : null),
+    activeWatches: () => watches.map((w) => ({ id: w.id, namespace: w.namespace })),
     lastStreamId: () => streamId,
     emitWatchBatch: (b) =>
       events.watchBatch.emit({

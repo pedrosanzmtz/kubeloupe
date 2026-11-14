@@ -20,9 +20,9 @@ Svelte) and a CLI, both built on the same Rust core.
   cluster, custom resources). Kinds you aren't allowed to list are
   greyed out.
 - **Live tables**: lists are kept up to date by Kubernetes watches, not by
-  polling, and stay smooth with thousands of rows. Filter by namespace and
-  by text. Pods and Nodes show CPU/memory usage when the metrics API is
-  available.
+  polling, and stay smooth with thousands of rows. Show one namespace, several
+  at once (up to 10, one watch each) or all of them, and filter by text.
+  Pods and Nodes show CPU/memory usage when the metrics API is available.
 - **Overview**: pod counts (crash-looping pods count as errors, not as
   running), problem pods, CPU/memory/pod capacity against requests and usage,
   and the newest warning events, each linking to its object. Kept live by

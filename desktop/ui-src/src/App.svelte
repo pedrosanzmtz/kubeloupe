@@ -58,7 +58,7 @@
 
   // Access depends on the scope: re-check when the namespace changes.
   $effect(() => {
-    void app.namespace;
+    void app.selectedNamespaces;
     untrack(checkAccess);
   });
 
