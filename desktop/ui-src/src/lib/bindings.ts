@@ -39,17 +39,25 @@ export const commands = {
 	 */
 	cmdSaveLogs: (filename: string, content: string, options?: InvokeOptions) => __TAURI_INVOKE<string>("cmd_save_logs", { filename, content }, options),
 	/**
-	 *  The overview. Parts the user may not see cluster-wide are narrowed to
-	 *  `namespace` (`null` = the context's namespace) or left out.
+	 *  Start the overview feed `id` (chosen by the UI, so no event can arrive
+	 *  before it knows the id). Parts the user may not see cluster-wide fall
+	 *  back to `namespace` (`null` = the context's namespace). Replaces a feed
+	 *  with the same id.
 	 */
-	cmdGetOverview: (namespace: string | null, options?: InvokeOptions) => __TAURI_INVOKE<Overview_Serialize>("cmd_get_overview", { namespace }, options),
+	cmdOverviewStart: (id: number, namespace: string | null, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_overview_start", { id, namespace }, options),
+	cmdOverviewStop: (id: number, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_overview_stop", { id }, options),
 	/**
 	 *  The namespace to start on: `null` (all namespaces) if the user may list
 	 *  pods cluster-wide, otherwise the context's namespace or the first one
 	 *  they can access.
 	 */
 	cmdDefaultNamespace: (options?: InvokeOptions) => __TAURI_INVOKE<string | null>("cmd_default_namespace", undefined, options),
-	cmdGetMetrics: (options?: InvokeOptions) => __TAURI_INVOKE<MetricsSnapshot>("cmd_get_metrics", undefined, options),
+	/**
+	 *  Usage for what is on screen: pod metrics in `namespace` (`null` = all
+	 *  namespaces), or node metrics (`namespace` is ignored). The other list
+	 *  is empty.
+	 */
+	cmdGetMetrics: (namespace: string | null, what: MetricsKind, options?: InvokeOptions) => __TAURI_INVOKE<MetricsSnapshot>("cmd_get_metrics", { namespace, what }, options),
 	/**
 	 *  Start watching a kind (in `namespace`, if it is namespaced). Returns the
 	 *  watch id carried by the `watch-batch` / `watch-state` events.
@@ -119,6 +127,8 @@ export const events = {
 	drainProgress: makeEvent<DrainProgress, DrainProgress>("drain-progress"),
 	execClosed: makeEvent<ExecClosed, ExecClosed>("exec-closed"),
 	execOutput: makeEvent<ExecOutput, ExecOutput>("exec-output"),
+	overviewState: makeEvent<OverviewStateChanged, OverviewStateChanged>("overview-state"),
+	overviewUpdate: makeEvent<OverviewChanged_Serialize, OverviewChanged_Deserialize>("overview-update"),
 	podLog: makeEvent<PodLog, PodLog>("pod-log"),
 	podLogDone: makeEvent<PodLogDone, PodLogDone>("pod-log-done"),
 	podLogError: makeEvent<PodLogError, PodLogError>("pod-log-error"),
@@ -177,6 +187,23 @@ export type BulkItemResult = {
 	key: string,
 	/**  Plain-words reason; empty when the delete was accepted. */
 	error: string,
+};
+
+/**  Requests and usage against what the nodes can allocate, like Lens. */
+export type Capacity = {
+	cpu_requests_millicores: number,
+	cpu_allocatable_millicores: number,
+	/**  0 unless `metrics`. */
+	cpu_usage_millicores: number,
+	memory_requests_bytes: number,
+	memory_allocatable_bytes: number,
+	/**  0 unless `metrics`. */
+	memory_usage_bytes: number,
+	/**  Whether usage came from the metrics API (metrics-server). */
+	metrics: boolean,
+	/**  Pods bound to a node that have not finished. */
+	pods: number,
+	pods_allocatable: number,
 };
 
 /**  Where a kind appears in the sidebar. */
@@ -308,12 +335,23 @@ export type EnvInfo = {
 	source: string,
 };
 
+/**  A warning event, linked to the object it is about. */
 export type EventInfo = {
+	/**  `namespace/name` of the event. */
+	key: string,
+	/**  The event type: `Warning` or `Normal`. */
 	kind: string,
 	reason: string,
 	message: string,
+	/**  `Kind/name` of the involved object, for display. */
 	object: string,
-	age: string,
+	object_api_version: string,
+	object_kind: string,
+	/**  Empty for cluster-scoped objects. */
+	object_namespace: string,
+	object_name: string,
+	/**  When it last happened (unix seconds), so a UI can show its age. */
+	time: number,
 	count: number,
 };
 
@@ -340,6 +378,9 @@ export type LogContainer = {
 	name: string,
 	init: boolean,
 };
+
+/**  Which metrics a view shows. */
+export type MetricsKind = "pods" | "nodes";
 
 export type MetricsSnapshot = {
 	available: boolean,
@@ -390,6 +431,35 @@ export type ObjectId = {
 export type Overview = Overview_Serialize | Overview_Deserialize;
 
 /**
+ *  A new overview for the overview feed `id` (sent when it changed, at
+ *  most about once a second).
+ */
+export type OverviewChanged = OverviewChanged_Serialize | OverviewChanged_Deserialize;
+
+/**
+ *  A new overview for the overview feed `id` (sent when it changed, at
+ *  most about once a second).
+ */
+export type OverviewChanged_Deserialize = {
+	id: number,
+	overview: Overview_Deserialize,
+};
+
+/**
+ *  A new overview for the overview feed `id` (sent when it changed, at
+ *  most about once a second).
+ */
+export type OverviewChanged_Serialize = {
+	id: number,
+	overview: Overview_Serialize,
+};
+
+/**  Connection state of the overview feed `id`. */
+export type OverviewStateChanged = {
+	id: number,
+} & WatchState;
+
+/**
  *  The overview. Each part is computed on its own: a part the user may not
  *  see is `None`, with a line in `notes` saying why, so a user with access
  *  to only some namespaces still gets an overview.
@@ -398,6 +468,12 @@ export type Overview_Deserialize = {
 	namespaces?: number | null,
 	nodes?: NodeCounts | null,
 	pods?: PodCounts_Deserialize | null,
+	/**
+	 *  Only when both the nodes and the pods of the whole cluster are
+	 *  visible: requests in one namespace say nothing about the nodes.
+	 */
+	capacity?: Capacity | null,
+	/**  Warning events only. */
 	events?: RecentEvents_Deserialize | null,
 	/**  What is missing or narrowed, and why. */
 	notes: string[],
@@ -412,6 +488,12 @@ export type Overview_Serialize = {
 	namespaces: number | null,
 	nodes: NodeCounts | null,
 	pods: PodCounts_Serialize | null,
+	/**
+	 *  Only when both the nodes and the pods of the whole cluster are
+	 *  visible: requests in one namespace say nothing about the nodes.
+	 */
+	capacity: Capacity | null,
+	/**  Warning events only. */
 	events: RecentEvents_Serialize | null,
 	/**  What is missing or narrowed, and why. */
 	notes: string[],
@@ -424,10 +506,16 @@ export type OwnerLink = {
 	controller: boolean,
 };
 
-/**  Pod counts, across the cluster or in one namespace. */
+/**
+ *  Pod counts, across the cluster or in one namespace. A pod counts once:
+ *  a crash-looping pod is in `waiting_errors`, not `running`.
+ */
 export type PodCounts = PodCounts_Serialize | PodCounts_Deserialize;
 
-/**  Pod counts, across the cluster or in one namespace. */
+/**
+ *  Pod counts, across the cluster or in one namespace. A pod counts once:
+ *  a crash-looping pod is in `waiting_errors`, not `running`.
+ */
 export type PodCounts_Deserialize = {
 	/**
 	 *  The namespace these were narrowed to because listing pods across
@@ -437,11 +525,24 @@ export type PodCounts_Deserialize = {
 	total: number,
 	running: number,
 	pending: number,
+	succeeded: number,
 	failed: number,
+	/**
+	 *  A container waits for a reason other than starting up:
+	 *  CrashLoopBackOff, ImagePullBackOff, CreateContainerConfigError, ...
+	 */
+	waiting_errors: number,
 	by_namespace: ([string, number])[],
+	/**  The worst problem pods first, at most 50. */
+	problems: ProblemPod[],
+	/**  How many problem pods there are in all. */
+	problems_total: number,
 };
 
-/**  Pod counts, across the cluster or in one namespace. */
+/**
+ *  Pod counts, across the cluster or in one namespace. A pod counts once:
+ *  a crash-looping pod is in `waiting_errors`, not `running`.
+ */
 export type PodCounts_Serialize = {
 	/**
 	 *  The namespace these were narrowed to because listing pods across
@@ -451,8 +552,18 @@ export type PodCounts_Serialize = {
 	total: number,
 	running: number,
 	pending: number,
+	succeeded: number,
 	failed: number,
+	/**
+	 *  A container waits for a reason other than starting up:
+	 *  CrashLoopBackOff, ImagePullBackOff, CreateContainerConfigError, ...
+	 */
+	waiting_errors: number,
 	by_namespace: ([string, number])[],
+	/**  The worst problem pods first, at most 50. */
+	problems: ProblemPod[],
+	/**  How many problem pods there are in all. */
+	problems_total: number,
 };
 
 /**  Pod-only part of a [`super::ResourceDetail`]. */
@@ -518,20 +629,38 @@ export type ProbeInfo = {
 	summary: string,
 };
 
-/**  Recent events, across the cluster or in one namespace. */
+/**
+ *  A pod worth looking at: a waiting error (CrashLoopBackOff, ...),
+ *  running but not ready, or pending for more than five minutes.
+ */
+export type ProblemPod = {
+	namespace: string,
+	name: string,
+	/**  As in the Pods table. */
+	status: string,
+	/**  Why it is listed: the status, "Not ready" or "Pending for 12m". */
+	reason: string,
+	restarts: number,
+	/**  Unix seconds. */
+	created: number,
+};
+
+/**  Warning events, across the cluster or in one namespace. */
 export type RecentEvents = RecentEvents_Serialize | RecentEvents_Deserialize;
 
-/**  Recent events, across the cluster or in one namespace. */
+/**  Warning events, across the cluster or in one namespace. */
 export type RecentEvents_Deserialize = {
 	/**  As in [`PodCounts::namespace`]. */
 	namespace?: string | null,
+	/**  Newest first. */
 	items: EventInfo[],
 };
 
-/**  Recent events, across the cluster or in one namespace. */
+/**  Warning events, across the cluster or in one namespace. */
 export type RecentEvents_Serialize = {
 	/**  As in [`PodCounts::namespace`]. */
 	namespace: string | null,
+	/**  Newest first. */
 	items: EventInfo[],
 };
 

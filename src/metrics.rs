@@ -124,10 +124,17 @@ fn is_not_found(e: &kube::Error) -> bool {
     matches!(e, kube::Error::Api(resp) if resp.code == 404)
 }
 
-/// Fetch per-pod CPU/memory usage. `Ok(None)` = metrics API unavailable.
-pub async fn get_pod_metrics(client: &Client) -> Result<Option<Vec<PodUsage>>> {
-    let api: Api<DynamicObject> =
-        Api::all_with(client.clone(), &metrics_resource("PodMetrics", "pods"));
+/// Fetch per-pod CPU/memory usage in `namespace` (`None` = all
+/// namespaces). `Ok(None)` = metrics API unavailable.
+pub async fn get_pod_metrics(
+    client: &Client,
+    namespace: Option<&str>,
+) -> Result<Option<Vec<PodUsage>>> {
+    let resource = metrics_resource("PodMetrics", "pods");
+    let api: Api<DynamicObject> = match namespace {
+        Some(ns) => Api::namespaced_with(client.clone(), ns, &resource),
+        None => Api::all_with(client.clone(), &resource),
+    };
     let list = match api.list(&ListParams::default()).await {
         Ok(list) => list,
         Err(e) if is_not_found(&e) => return Ok(None),
@@ -164,15 +171,50 @@ pub async fn get_pod_metrics(client: &Client) -> Result<Option<Vec<PodUsage>>> {
     Ok(Some(usages))
 }
 
-/// Fetch per-node CPU/memory usage with capacity. `Ok(None)` = metrics API
-/// unavailable.
-pub async fn get_node_metrics(client: &Client) -> Result<Option<Vec<NodeUsage>>> {
+/// Each node's (name, cpu millicores, memory bytes) from NodeMetrics only.
+/// `Ok(None)` = metrics API unavailable.
+async fn list_node_usage(client: &Client) -> Result<Option<Vec<(String, u64, u64)>>> {
     let api: Api<DynamicObject> =
         Api::all_with(client.clone(), &metrics_resource("NodeMetrics", "nodes"));
     let list = match api.list(&ListParams::default()).await {
         Ok(list) => list,
         Err(e) if is_not_found(&e) => return Ok(None),
         Err(e) => return Err(e.into()),
+    };
+    let usage = list
+        .items
+        .into_iter()
+        .map(|item| {
+            let usage = &item.data["usage"];
+            let cpu = usage["cpu"]
+                .as_str()
+                .and_then(parse_cpu_quantity)
+                .unwrap_or(0);
+            let memory = usage["memory"]
+                .as_str()
+                .and_then(parse_memory_quantity)
+                .unwrap_or(0);
+            (item.metadata.name.unwrap_or_default(), cpu, memory)
+        })
+        .collect();
+    Ok(Some(usage))
+}
+
+/// Total (cpu millicores, memory bytes) used by all nodes, from NodeMetrics
+/// alone (one small object per node). `Ok(None)` = metrics API unavailable.
+pub async fn get_node_usage_total(client: &Client) -> Result<Option<(u64, u64)>> {
+    Ok(list_node_usage(client).await?.map(|nodes| {
+        nodes
+            .iter()
+            .fold((0, 0), |(c, m), (_, cpu, mem)| (c + cpu, m + mem))
+    }))
+}
+
+/// Fetch per-node CPU/memory usage with capacity. `Ok(None)` = metrics API
+/// unavailable.
+pub async fn get_node_metrics(client: &Client) -> Result<Option<Vec<NodeUsage>>> {
+    let Some(usage) = list_node_usage(client).await? else {
+        return Ok(None);
     };
     let nodes: Api<Node> = Api::all(client.clone());
     let mut capacities: BTreeMap<String, (u64, u64)> = BTreeMap::new();
@@ -193,27 +235,19 @@ pub async fn get_node_metrics(client: &Client) -> Result<Option<Vec<NodeUsage>>>
             capacities.insert(name, (cpu_cap, mem_cap));
         }
     }
-    let mut usages = Vec::new();
-    for item in list.items {
-        let name = item.metadata.name.unwrap_or_default();
-        let data = &item.data;
-        let cpu = data["usage"]["cpu"]
-            .as_str()
-            .and_then(parse_cpu_quantity)
-            .unwrap_or(0);
-        let memory = data["usage"]["memory"]
-            .as_str()
-            .and_then(parse_memory_quantity)
-            .unwrap_or(0);
-        let (cpu_cap, mem_cap) = capacities.get(&name).copied().unwrap_or((0, 0));
-        usages.push(NodeUsage {
-            name,
-            cpu_millicores: cpu,
-            cpu_capacity_millicores: cpu_cap,
-            memory_bytes: memory,
-            memory_capacity_bytes: mem_cap,
-        });
-    }
+    let usages = usage
+        .into_iter()
+        .map(|(name, cpu, memory)| {
+            let (cpu_cap, mem_cap) = capacities.get(&name).copied().unwrap_or((0, 0));
+            NodeUsage {
+                name,
+                cpu_millicores: cpu,
+                cpu_capacity_millicores: cpu_cap,
+                memory_bytes: memory,
+                memory_capacity_bytes: mem_cap,
+            }
+        })
+        .collect();
     Ok(Some(usages))
 }
 

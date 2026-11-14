@@ -60,7 +60,7 @@ test("the overview shows the cluster summary", async ({ page }) => {
   await openApp(page);
   await expect(page.getByText("2/2")).toBeVisible();
   await expect(page.getByText("5 pods, 2 nodes")).toBeVisible();
-  await expect(page.locator("header")).toContainText("Connected");
+  await expect(page.locator("header")).toContainText("Live");
 });
 
 test("Refresh rediscovers and restarts the current watch", async ({ page }) => {

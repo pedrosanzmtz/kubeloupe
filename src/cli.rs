@@ -76,7 +76,7 @@ pub async fn print_pod_logs(
 
 /// Print `kubectl top pods`-style usage (CLI output).
 pub async fn print_top_pods(client: &Client) -> Result<()> {
-    match get_pod_metrics(client).await? {
+    match get_pod_metrics(client, None).await? {
         None => {
             println!("Metrics API not available on this cluster (is metrics-server installed?)")
         }
