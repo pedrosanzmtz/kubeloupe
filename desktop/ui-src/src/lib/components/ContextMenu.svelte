@@ -36,7 +36,7 @@
 <!-- A click or right-click anywhere else dismisses the menu. -->
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 <div class="shield" onclick={onclose} oncontextmenu={(e) => (e.preventDefault(), onclose())}></div>
-<div class="menu" role="menu" bind:this={el} style:left="{left}px" style:top="{top}px">
+<div class="menu" role="menu" data-testid="context-menu" bind:this={el} style:left="{left}px" style:top="{top}px">
   <div class="title" title={title}>{title}</div>
   {#each items as item (item.label)}
     <button

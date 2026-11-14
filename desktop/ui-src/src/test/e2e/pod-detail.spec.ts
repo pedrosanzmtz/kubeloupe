@@ -11,8 +11,8 @@ async function openPod(page: Page, name = "web-1"): Promise<Fake> {
   return fake;
 }
 
-const panel = (page: Page) => page.locator("aside");
-const logLines = (page: Page) => panel(page).locator(".output .line");
+const panel = (page: Page) => page.getByTestId("detail-panel");
+const logLines = (page: Page) => panel(page).getByTestId("log-line");
 
 test("the pod panel shows details and starts the log stream with the right args", async ({ page }) => {
   const fake = await openPod(page);

@@ -82,15 +82,16 @@
     {/if}
   {/if}
   <button type="button" class="btn" onclick={load}>Reload</button>
-  <button type="button" class="btn primary" onclick={save} disabled={locked || !loaded}>Save</button>
+  <button type="button" class="btn primary" data-testid="yaml-save" onclick={save} disabled={locked || !loaded}>Save</button>
 </div>
 <textarea
+  data-testid="yaml-editor"
   spellcheck="false"
   aria-label="{target.resource.kind} YAML"
   readonly={locked}
   bind:value={text}
 ></textarea>
-<p class="detail-status muted">
+<p class="detail-status muted" data-testid="yaml-status">
   {status}{#if locked && !status}Values are hidden. Reveal them to edit this Secret.{/if}
 </p>
 {#if takeovers.length > 0}

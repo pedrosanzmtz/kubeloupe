@@ -127,7 +127,7 @@
   }
 </script>
 
-<div class="table" role="table">
+<div class="table" role="table" data-testid="resource-table">
   {#if selected.size > 0}
     <div class="bulk" role="toolbar" aria-label="Selection">
       <span>{selected.size} selected</span>
@@ -168,6 +168,7 @@
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <div
           class="tr"
+          data-testid="resource-row"
           class:clickable={!!onselect}
           class:selected={entry.key === selectedKey}
           class:checked={selected.has(entry.key)}
