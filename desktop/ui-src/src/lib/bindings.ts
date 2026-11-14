@@ -15,6 +15,18 @@ export const commands = {
 	cmdStreamPodLogs: (namespace: string, name: string, container: string | null, previous: boolean | null, tailLines: number | null, sinceSeconds: number | null, timestamps: boolean | null, streamId: number, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_stream_pod_logs", { namespace, name, container, previous, tailLines, sinceSeconds, timestamps, streamId }, options),
 	cmdStopPodLogs: (options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_stop_pod_logs", undefined, options),
 	/**
+	 *  Follow the logs of all pods of a Deployment, StatefulSet, DaemonSet, Job
+	 *  or ReplicaSet (`kind` is case-insensitive). Replaces any running log
+	 *  stream; stopped by `cmd_stop_pod_logs`, `cmd_stop_workload_logs`, another
+	 *  log stream or a context switch.
+	 */
+	cmdStreamWorkloadLogs: (kind: string, namespace: string, name: string, options: WorkloadLogOptions_Deserialize, streamId: number, _options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_stream_workload_logs", { kind, namespace, name, options, streamId }, _options),
+	/**
+	 *  Stop a workload log stream (and every per-pod task under it), unless a
+	 *  newer stream has already replaced it.
+	 */
+	cmdStopWorkloadLogs: (streamId: number, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_stop_workload_logs", { streamId }, options),
+	/**
 	 *  Save log text to the user's Downloads folder and return the path. A
 	 *  webview Blob download is not reliable across the platforms Tauri targets
 	 *  and there is no file dialog without an extra plugin, so we write directly.
@@ -60,6 +72,8 @@ export const events = {
 	podLogError: makeEvent<PodLogError, PodLogError>("pod-log-error"),
 	watchBatch: makeEvent<WatchBatch, WatchBatch>("watch-batch"),
 	watchState: makeEvent<WatchStateChanged, WatchStateChanged>("watch-state"),
+	workloadLog: makeEvent<WorkloadLog, WorkloadLog>("workload-log"),
+	workloadNotice: makeEvent<WorkloadNotice, WorkloadNotice>("workload-notice"),
 };
 
 /* Types */
@@ -298,6 +312,13 @@ export type SecretKey = {
 	bytes: number,
 };
 
+/**  A log line and where it came from. */
+export type TaggedLine = {
+	pod: string,
+	container: string,
+	line: string,
+};
+
 /**
  *  One coalesced set of table rows for the watch `id`: the first batch is a
  *  full snapshot, later ones are incremental.
@@ -326,6 +347,69 @@ export type WatchState =
 export type WatchStateChanged = {
 	id: string,
 } & WatchState;
+
+/**
+ *  A batch of merged log lines from the pods of a workload. Same `streamId`
+ *  scheme as [`PodLog`]; every line says which pod and container it is from.
+ */
+export type WorkloadLog = {
+	streamId: number,
+	data: TaggedLine[],
+};
+
+/**  Options of a workload log stream. */
+export type WorkloadLogOptions = WorkloadLogOptions_Serialize | WorkloadLogOptions_Deserialize;
+
+/**  Options of a workload log stream. */
+export type WorkloadLogOptions_Deserialize = {
+	/**  One container name for every pod; `None` follows all containers. */
+	container?: string | null,
+	/**
+	 *  Applies to the pods present when the stream starts; pods that appear
+	 *  later are read from their beginning.
+	 */
+	tailLines?: number | null,
+	sinceSeconds?: number | null,
+	timestamps?: boolean | null,
+};
+
+/**  Options of a workload log stream. */
+export type WorkloadLogOptions_Serialize = {
+	/**  One container name for every pod; `None` follows all containers. */
+	container: string | null,
+	/**
+	 *  Applies to the pods present when the stream starts; pods that appear
+	 *  later are read from their beginning.
+	 */
+	tailLines: number | null,
+	sinceSeconds: number | null,
+	timestamps: boolean | null,
+};
+
+/**  A change in which pods a workload stream is following. */
+export type WorkloadNotice = {
+	streamId: number,
+	kind: WorkloadNoticeKind,
+	/**  Empty for `truncated`. */
+	pod: string,
+	container: string,
+	message: string,
+	/**  For `truncated`: the stream limit and how many containers are waiting. */
+	limit: number,
+	skipped: number,
+};
+
+export type WorkloadNoticeKind = 
+/**  A per-container stream started (a pod appeared). */
+"started" | 
+/**  The container exited and its log ended. */
+"ended" | 
+/**  The pod was deleted. */
+"deleted" | 
+/**  The stream failed; see `message`. */
+"failed" | 
+/**  More containers match than the stream limit: `skipped` are waiting. */
+"truncated";
 
 /* Tauri Specta runtime */
 type EventEmit<T> = [T] extends [null] ? () => Promise<void> : (payload: T) => Promise<void>;

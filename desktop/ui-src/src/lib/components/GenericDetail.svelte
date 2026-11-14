@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import YamlEditor from "./YamlEditor.svelte";
+  import LogViewer from "./LogViewer.svelte";
+  import { WORKLOAD_KINDS } from "../logs";
   import { commands } from "../bindings";
   import type { OwnerLink, ResourceDetail } from "../bindings";
   import { kindOf, openObject } from "../stores/app.svelte";
@@ -13,15 +15,17 @@
   let info = $state.raw<ResourceDetail | null>(null);
   let loadError = $state("");
 
-  /*
-   * Tabs. EXTENSION POINT: workload-level logs (Deployment, StatefulSet,
-   * DaemonSet, Job) add `{ id: "logs", label: "Logs" }` here for those kinds
-   * and render their viewer in a matching `{#if tab === "logs"}` block below.
-   */
-  const tabs = [
+  /** Workloads get a Logs tab with their pods' logs merged. */
+  const isWorkload = $derived(
+    (target.resource.group === "apps" || target.resource.group === "batch") &&
+      WORKLOAD_KINDS.includes(target.resource.kind),
+  );
+  const workload = $derived({ kind: target.resource.kind, namespace: target.namespace, name: target.name });
+  const tabs = $derived([
     { id: "overview", label: "Overview" },
+    ...(isWorkload ? [{ id: "logs", label: "Logs" }] : []),
     { id: "yaml", label: "YAML" },
-  ];
+  ]);
   let tab = $state("overview");
 
   let confirmDelete = $state(false);
@@ -221,6 +225,8 @@
       {/if}
     </div>
     {#if deleteError}<p class="detail-status error-text">{deleteError}</p>{/if}
+  {:else if tab === "logs" && isWorkload}
+    <LogViewer {workload} />
   {:else if tab === "yaml"}
     <YamlEditor {target} />
   {/if}
