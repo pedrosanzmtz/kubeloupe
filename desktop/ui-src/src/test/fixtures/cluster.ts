@@ -40,6 +40,9 @@ export interface FakeCluster {
   revealedYaml: Record<string, string>;
   /** Returned (once) by the next `cmd_apply_resource_yaml`. */
   nextTakeovers: FieldTakeover[];
+  /** `metadata.resourceVersion` by `kindId|rowKey` (default 1); a save bumps it. Bump it to
+   *  simulate a write by someone else. */
+  resourceVersions: Record<string, number>;
   /** `cmd_bulk_delete` fails these row keys with the given reason. */
   bulkErrors: Record<string, string>;
   overview: Overview_Serialize;
@@ -167,6 +170,7 @@ export function defaultCluster(): FakeCluster {
       ].join("\n"),
     },
     nextTakeovers: [],
+    resourceVersions: {},
     bulkErrors: {},
     overview: {
       namespaces: 3,

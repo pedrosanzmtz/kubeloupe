@@ -191,6 +191,127 @@ pub async fn apply_resource_yaml(
     name: &str,
     yaml: &str,
 ) -> Result<Vec<FieldTakeover>> {
+    match apply_resource_yaml_with(client, r, namespace, name, yaml, &ApplyOptions::default())
+        .await?
+    {
+        ApplyOutcome::Applied { takeovers } => Ok(takeovers),
+        // Only reported when a resourceVersion was given.
+        ApplyOutcome::Conflict { .. } => bail!("{name} changed on the server"),
+    }
+}
+
+/// How [`apply_resource_yaml_with`] applies.
+#[derive(Debug, Clone, Default)]
+pub struct ApplyOptions {
+    /// Validate only: the API server runs the whole apply (admission,
+    /// schema, ownership) with `dryRun=All` and stores nothing.
+    pub dry_run: bool,
+    /// The `metadata.resourceVersion` the YAML was loaded at. If set and the
+    /// object has changed since, nothing is applied and the outcome is
+    /// [`ApplyOutcome::Conflict`].
+    pub resource_version: Option<String>,
+}
+
+/// What an apply did.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[serde(tag = "outcome", rename_all = "camelCase")]
+pub enum ApplyOutcome {
+    /// Applied (or, for a dry run, would apply). `takeovers` are the fields
+    /// it took (or would take) over from other field managers.
+    Applied { takeovers: Vec<FieldTakeover> },
+    /// Someone else wrote to the object since it was loaded; nothing was
+    /// applied. `resource_version` is the object's current one.
+    Conflict { resource_version: String },
+}
+
+/// [`apply_resource_yaml`] with a dry run and a check that the object has
+/// not changed since it was loaded (see [`ApplyOptions`]).
+///
+/// The check is a read before the apply plus the `resourceVersion` as a
+/// precondition in the forced apply itself, so a write that lands between
+/// the two is not overwritten silently either.
+pub async fn apply_resource_yaml_with(
+    client: &Client,
+    r: &ResourceRef,
+    namespace: &str,
+    name: &str,
+    yaml: &str,
+    opts: &ApplyOptions,
+) -> Result<ApplyOutcome> {
+    let value = prepare_apply(r, name, yaml)?;
+    let api = object_api(client, r, namespace)?;
+    let expected = opts.resource_version.as_deref().filter(|v| !v.is_empty());
+    if let Some(expected) = expected {
+        let current = current_resource_version(&api, name).await?;
+        if current != expected {
+            return Ok(ApplyOutcome::Conflict {
+                resource_version: current,
+            });
+        }
+    }
+
+    let patch = Patch::Apply(&value);
+    let takeovers = match api
+        .patch(name, &PatchParams::apply(FIELD_MANAGER).dry_run(), &patch)
+        .await
+    {
+        Ok(_) => Vec::new(),
+        Err(kube::Error::Api(e)) if e.code == 409 => parse_apply_conflicts(&e.message),
+        Err(e) => return Err(e.into()),
+    };
+    if opts.dry_run {
+        // The non-forced dry run stops at the ownership conflicts; validate
+        // the rest of the object the way the real save will send it.
+        if !takeovers.is_empty() {
+            api.patch(
+                name,
+                &PatchParams::apply(FIELD_MANAGER).force().dry_run(),
+                &patch,
+            )
+            .await?;
+        }
+        return Ok(ApplyOutcome::Applied { takeovers });
+    }
+
+    let mut body = value;
+    if let (Some(rv), Some(meta)) = (
+        expected,
+        body.get_mut("metadata").and_then(Value::as_object_mut),
+    ) {
+        meta.insert("resourceVersion".into(), Value::String(rv.to_string()));
+    }
+    match api
+        .patch(
+            name,
+            &PatchParams::apply(FIELD_MANAGER).force(),
+            &Patch::Apply(&body),
+        )
+        .await
+    {
+        Ok(_) => Ok(ApplyOutcome::Applied { takeovers }),
+        // A forced apply has no ownership conflicts: a 409 is the
+        // resourceVersion precondition.
+        Err(kube::Error::Api(e)) if e.code == 409 && expected.is_some() => {
+            Ok(ApplyOutcome::Conflict {
+                resource_version: current_resource_version(&api, name).await?,
+            })
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+async fn current_resource_version(api: &Api<DynamicObject>, name: &str) -> Result<String> {
+    Ok(api
+        .get_metadata(name)
+        .await?
+        .metadata
+        .resource_version
+        .unwrap_or_default())
+}
+
+/// Parse and check edited YAML, and strip what the server owns.
+fn prepare_apply(r: &ResourceRef, name: &str, yaml: &str) -> Result<Value> {
     let mut value: Value = serde_yaml::from_str(yaml).context("invalid YAML")?;
     if !value.is_object() {
         bail!("the YAML must be a single Kubernetes object");
@@ -212,19 +333,7 @@ pub async fn apply_resource_yaml(
     if value.pointer("/metadata/name").and_then(Value::as_str) != Some(name) {
         bail!("metadata.name must stay \"{name}\" (rename is not supported)");
     }
-    let api = object_api(client, r, namespace)?;
-    let patch = Patch::Apply(&value);
-    let takeovers = match api
-        .patch(name, &PatchParams::apply(FIELD_MANAGER).dry_run(), &patch)
-        .await
-    {
-        Ok(_) => Vec::new(),
-        Err(kube::Error::Api(e)) if e.code == 409 => parse_apply_conflicts(&e.message),
-        Err(e) => return Err(e.into()),
-    };
-    api.patch(name, &PatchParams::apply(FIELD_MANAGER).force(), &patch)
-        .await?;
-    Ok(takeovers)
+    Ok(value)
 }
 
 /// Parse the field-ownership conflicts out of a server-side apply 409
@@ -360,6 +469,36 @@ mod tests {
                 "metadata": { "name": "c", "labels": {"a": "b"}, "ownerReferences": [{"uid": "o"}] },
                 "data": {"k": "v"}
             })
+        );
+    }
+
+    #[test]
+    fn prepare_checks_identity_and_strips_server_fields() {
+        let cm = ResourceRef {
+            group: String::new(),
+            version: "v1".into(),
+            kind: "ConfigMap".into(),
+            plural: "configmaps".into(),
+            namespaced: true,
+        };
+        let ok = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: c\n  resourceVersion: '7'\ndata:\n  k: v\n";
+        let v = prepare_apply(&cm, "c", ok).unwrap();
+        assert!(v.pointer("/metadata/resourceVersion").is_none());
+        let renamed = prepare_apply(&cm, "other", ok).unwrap_err().to_string();
+        assert!(renamed.contains("metadata.name must stay"), "{renamed}");
+        // The parser's position is kept so the editor can point at it.
+        let broken = prepare_apply(&cm, "c", "kind: [\n").unwrap_err();
+        assert!(format!("{broken:#}").contains("line"), "{broken:#}");
+    }
+
+    #[test]
+    fn apply_outcome_is_tagged() {
+        let out = ApplyOutcome::Conflict {
+            resource_version: "9".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&out).unwrap(),
+            json!({"outcome": "conflict", "resource_version": "9"})
         );
     }
 

@@ -118,15 +118,25 @@ describe("kubeloupe on WebKitGTK against kind", { timeout: 15 * 60_000 }, () => 
     await (
       await app.find(By.xpath("//*[@data-testid='detail-panel']//button[@role='tab'][normalize-space()='YAML']"))
     ).click();
+    // The editor is CodeMirror; its root element exposes `kubeloupeEditor`
+    // (getValue / setValue, which edits like typing) once it has loaded.
     const editor = await app.find(byTestId("yaml-editor"));
     const yaml = await app.waitFor(
       async () => {
-        const v = await editor.getAttribute("value");
+        const v = await app.js("return arguments[0].kubeloupeEditor?.getValue() ?? null", editor);
         return v?.includes("greeting: before") ? v : null;
       },
-      { message: "the ConfigMap's YAML" },
+      { message: "the ConfigMap's YAML in the editor" },
     );
-    await app.setValue(editor, yaml.replace("greeting: before", "greeting: after"));
+    await app.js(
+      "arguments[0].kubeloupeEditor.setValue(arguments[1])",
+      editor,
+      yaml.replace("greeting: before", "greeting: after"),
+    );
+    // Review runs a server dry run and shows the diff; Save is on that screen.
+    const review = await app.find(byTestId("yaml-review"));
+    await app.waitFor(() => review.isEnabled(), { message: "Review to be enabled by the edit" });
+    await review.click();
     await (await app.find(byTestId("yaml-save"))).click();
     await app.waitFor(async () => /saved/i.test(await (await app.driver.findElement(byTestId("yaml-status"))).getText()), {
       message: "the save to finish",

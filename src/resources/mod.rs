@@ -25,8 +25,8 @@ pub use columns::make_row;
 pub use detail::get_resource_detail;
 pub use discovery::{can_list, check_access, discover, resolve_kind};
 pub use ops::{
-    apply_resource_yaml, delete_resource, dyn_api, get_resource, get_resource_yaml, list_resources,
-    FieldTakeover,
+    apply_resource_yaml, apply_resource_yaml_with, delete_resource, dyn_api, get_resource,
+    get_resource_yaml, list_resources, ApplyOptions, ApplyOutcome, FieldTakeover,
 };
 pub use table::render_table;
 

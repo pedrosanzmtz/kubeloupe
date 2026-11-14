@@ -25,8 +25,8 @@ use kubeloupe::actions::{
     set_unschedulable, trigger_cronjob, DrainEvent, DrainOptions,
 };
 use kubeloupe::resources::{
-    self, apply_resource_yaml, delete_resource, get_resource_detail, get_resource_yaml,
-    list_resources, Category, ResourceKind,
+    self, apply_resource_yaml, apply_resource_yaml_with, delete_resource, get_resource_detail,
+    get_resource_yaml, list_resources, ApplyOptions, ApplyOutcome, Category, ResourceKind,
 };
 use kubeloupe::watch::Update;
 use kubeloupe::watch::WatchState;
@@ -690,6 +690,67 @@ async fn generic_yaml_can_be_saved_twice_in_a_row() -> Result<()> {
         // accumulation: only the last set of keys remains.
         let now = get_resource_yaml(&client, r, &ns, "cm", false).await?;
         ensure!(now.contains("x3:") && !now.contains("x2:"), "{now}");
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+#[ignore]
+async fn yaml_dry_run_validates_and_a_stale_version_is_a_conflict() -> Result<()> {
+    in_temp_ns("kl-it-dryrun", |client, ns| async move {
+        let kind = kind_named(&client, "configmaps").await?;
+        let r = &kind.resource;
+        apply_resource_yaml(&client, r, &ns, "cm", &configmap_yaml(&ns, "  a: \"1\"\n")).await?;
+        let loaded = get_resource_yaml(&client, r, &ns, "cm", false).await?;
+        let rv = resources::get_resource(&client, r, &ns, "cm")
+            .await?
+            .metadata
+            .resource_version
+            .unwrap_or_default();
+        let opts = |dry_run: bool, rv: &str| ApplyOptions {
+            dry_run,
+            resource_version: Some(rv.to_string()),
+        };
+
+        // A dry run validates and stores nothing.
+        let edited = loaded.replacen("\ndata:", "\ndata:\n  b: \"2\"", 1);
+        let out =
+            apply_resource_yaml_with(&client, r, &ns, "cm", &edited, &opts(true, &rv)).await?;
+        ensure!(
+            out == ApplyOutcome::Applied { takeovers: vec![] },
+            "{out:?}"
+        );
+        let after = get_resource_yaml(&client, r, &ns, "cm", false).await?;
+        ensure!(!after.contains("b:"), "{after}");
+
+        // A field the schema does not have is rejected by the dry run.
+        let invalid = format!("{loaded}spec:\n  foo: 1\n");
+        let err = apply_resource_yaml_with(&client, r, &ns, "cm", &invalid, &opts(true, &rv))
+            .await
+            .expect_err("unknown field accepted");
+        ensure!(format!("{err:#}").contains("spec"), "{err:#}");
+
+        // Someone else writes: the edit loaded at `rv` is not applied.
+        apply_resource_yaml(&client, r, &ns, "cm", &configmap_yaml(&ns, "  a: \"9\"\n")).await?;
+        let out =
+            apply_resource_yaml_with(&client, r, &ns, "cm", &edited, &opts(false, &rv)).await?;
+        let ApplyOutcome::Conflict {
+            resource_version: latest,
+        } = out
+        else {
+            bail!("expected a conflict, got {out:?}");
+        };
+        ensure!(latest != rv);
+        let now = get_resource_yaml(&client, r, &ns, "cm", false).await?;
+        ensure!(!now.contains("b:"), "{now}");
+
+        // Against the latest version it applies.
+        let out =
+            apply_resource_yaml_with(&client, r, &ns, "cm", &edited, &opts(false, &latest)).await?;
+        ensure!(matches!(out, ApplyOutcome::Applied { .. }), "{out:?}");
+        let now = get_resource_yaml(&client, r, &ns, "cm", false).await?;
+        ensure!(now.contains("b:"), "{now}");
         Ok(())
     })
     .await
