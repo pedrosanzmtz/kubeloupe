@@ -4,6 +4,7 @@ import type { ResourceKind } from "../bindings";
 import { EMPTY_METRICS, isNode, isPod } from "../columns";
 import type { Metrics, Row } from "../columns";
 import { setStatus, showError, stamp } from "./app.svelte";
+import { clusterError } from "../clusterError";
 import { KeyedStore } from "./keyed.svelte";
 
 const METRICS_INTERVAL_MS = 20_000;
@@ -100,8 +101,9 @@ export class LiveTable {
     } catch (e) {
       if (token !== this.#token) return;
       this.#starting = false;
-      setStatus(false, "Cluster unreachable");
-      showError("Could not reach the cluster: " + e);
+      const err = clusterError(e);
+      setStatus(false, err.status);
+      showError(err.message);
       this.#retryTimer = setTimeout(() => this.start(kind, namespace), WATCH_RETRY_MS);
       return;
     }

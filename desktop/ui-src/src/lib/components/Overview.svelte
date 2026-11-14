@@ -3,6 +3,7 @@
   import { commands } from "../bindings";
   import type { Overview } from "../bindings";
   import { app, setStatus, showError, stamp } from "../stores/app.svelte";
+  import { clusterError } from "../clusterError";
 
   /** The overview is not watched; it re-requests itself while it is open. */
   const REFRESH_MS = 30_000;
@@ -22,8 +23,9 @@
       app.count = counts.join(", ");
       stamp();
     } catch (e) {
-      setStatus(false, "Cluster unreachable");
-      showError("Could not reach the cluster: " + e);
+      const err = clusterError(e);
+      setStatus(false, err.status);
+      showError(err.message);
       overview = null;
     }
   }
