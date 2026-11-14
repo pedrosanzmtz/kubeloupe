@@ -87,6 +87,9 @@ pub enum WatchState {
     /// The watch failed and is backing off before retrying (it re-lists
     /// by itself when it has to).
     Reconnecting { error: String },
+    /// The server refused the list or watch (403). Retrying would not help,
+    /// so the watch stops; `error` is the server's message.
+    Forbidden { error: String },
 }
 
 /// One step of a watch, with objects already summarized.
@@ -228,11 +231,24 @@ where
     }
 }
 
+/// Whether a watcher error is the server refusing access (HTTP 403).
+fn is_forbidden(e: &watcher::Error) -> bool {
+    match e {
+        watcher::Error::InitialListFailed(kube::Error::Api(r))
+        | watcher::Error::WatchStartFailed(kube::Error::Api(r))
+        | watcher::Error::WatchFailed(kube::Error::Api(r))
+        | watcher::Error::WatchError(r) => r.code == 403,
+        _ => false,
+    }
+}
+
 /// Tracks the watcher's lifecycle and turns raw events into [`Update`]s.
 struct Tracker<T> {
     init: Vec<T>,
     live: bool,
     failing: bool,
+    /// A 403 ended the watch.
+    done: bool,
 }
 
 impl<T> Tracker<T> {
@@ -243,6 +259,13 @@ impl<T> Tracker<T> {
     ) -> Vec<Update<T>> {
         let mut out = Vec::new();
         match event {
+            Err(e) if is_forbidden(&e) => {
+                self.done = true;
+                self.live = false;
+                out.push(Update::State(WatchState::Forbidden {
+                    error: e.to_string(),
+                }));
+            }
             Err(e) => {
                 // Only report the first failure of a streak.
                 if !self.failing {
@@ -287,8 +310,10 @@ impl<T> Tracker<T> {
 }
 
 /// Watch `api`, keeping a reflector [`Store`] of the full objects and
-/// yielding summaries (via `convert`) as [`Update`]s. The stream never ends
-/// on its own: failures are retried with backoff. Drop it to stop.
+/// yielding summaries (via `convert`) as [`Update`]s. Failures are retried
+/// with backoff, except a 403: the stream then ends after a
+/// [`WatchState::Forbidden`]. Otherwise it never ends on its own; drop it to
+/// stop.
 ///
 /// `dyntype` is the kind's dynamic type (`()` for typed resources, an
 /// `ApiResource` for `DynamicObject`), so one watcher serves both the typed
@@ -320,17 +345,28 @@ where
 {
     let writer = reflector::store::Writer::new(dyntype);
     let store = writer.as_reader();
-    let events = reflector::reflector(writer, watcher::watcher(api, config).default_backoff());
+    let events =
+        reflector::reflector(writer, watcher::watcher(api, config).default_backoff()).boxed();
     let tracker = Tracker {
         init: Vec::new(),
         live: false,
         failing: false,
+        done: false,
     };
-    let updates = events
-        .scan(tracker, move |t, event| {
-            futures::future::ready(Some(t.step(event, &convert)))
-        })
-        .flat_map(stream::iter);
+    // End right after a 403 instead of polling the watcher again, which
+    // would only sleep in its backoff and retry.
+    let updates = stream::unfold(
+        (events, tracker, convert),
+        |(mut events, mut t, convert)| async move {
+            if t.done {
+                return None;
+            }
+            let event = events.next().await?;
+            let out = t.step(event, &convert);
+            Some((out, (events, t, convert)))
+        },
+    )
+    .flat_map(stream::iter);
     let first = stream::once(futures::future::ready(Update::State(
         WatchState::Connecting,
     )));
@@ -516,6 +552,7 @@ mod tests {
             init: vec![],
             live: false,
             failing: false,
+            done: false,
         };
         let conv = |s: &String| s.clone();
         assert!(t.step(Ok(Event::Init), &conv).is_empty());
@@ -535,5 +572,30 @@ mod tests {
         assert!(t.step(err(), &conv).is_empty());
         let out = t.step(Ok(Event::Apply("b".to_string())), &conv);
         assert_eq!(out.last(), Some(&Update::State(WatchState::Live)));
+        assert!(!t.done);
+    }
+
+    #[test]
+    fn tracker_stops_on_forbidden() {
+        let mut t = Tracker::<String> {
+            init: vec![],
+            live: false,
+            failing: false,
+            done: false,
+        };
+        let conv = |s: &String| s.clone();
+        let forbidden =
+            watcher::Error::InitialListFailed(kube::Error::Api(kube::core::ErrorResponse {
+                status: "Failure".into(),
+                message: "pods is forbidden".into(),
+                reason: "Forbidden".into(),
+                code: 403,
+            }));
+        let out = t.step(Err(forbidden), &conv);
+        assert!(
+            matches!(out.as_slice(), [Update::State(WatchState::Forbidden { error })] if error.contains("forbidden")),
+            "{out:?}"
+        );
+        assert!(t.done);
     }
 }

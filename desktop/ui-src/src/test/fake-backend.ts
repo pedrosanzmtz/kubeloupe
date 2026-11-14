@@ -134,11 +134,14 @@ export function installFakeBackend(cluster: FakeCluster = defaultCluster()): Fak
       return null;
     },
     cmdListNamespaces: () => cluster.namespaces,
+    cmdDefaultNamespace: () => cluster.defaultNamespace,
     cmdDiscover: () => cluster.kinds,
-    cmdCheckAccess: (kinds) =>
+    cmdCheckAccess: (kinds, namespace) =>
       kinds.map((r) => {
         const id = kindOf(r).id;
-        return { id, allowed: !cluster.denied.includes(id) };
+        const clusterWide = r.namespaced && namespace === null;
+        const allowed = !cluster.denied.includes(id) && !(clusterWide && cluster.deniedClusterWide.includes(id));
+        return { id, allowed };
       }),
     cmdGetOverview: () => cluster.overview,
     cmdGetMetrics: () => cluster.metrics,
@@ -150,6 +153,11 @@ export function installFakeBackend(cluster: FakeCluster = defaultCluster()): Fak
       // Like the backend: the full list first, then "live". Sent after the
       // reply so the store knows the id (it also buffers early events).
       setTimeout(() => {
+        if (!namespace && cluster.deniedClusterWide.includes(kind.id)) {
+          // Like the backend: a 403 ends the watch with one "forbidden".
+          void events.watchState.emit({ id, state: "forbidden", error: `${kind.resource.plural} is forbidden` });
+          return;
+        }
         const applied = rowsOf(kind).filter((r) => !namespace || r.namespace === namespace);
         void events.watchBatch.emit({ id, snapshot: true, applied, deleted: [] });
         void events.watchState.emit({ id, state: "live" });

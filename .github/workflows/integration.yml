@@ -27,6 +27,12 @@ jobs:
       - name: Create kind cluster
         run: bash scripts/test-cluster/setup.sh
 
+      # A namespace-scoped user (edit in team-a only) for the RBAC tests.
+      - name: Create limited user
+        run: |
+          bash scripts/test-cluster/limited-user.sh "$HOME/.kube/kubeloupe-limited.yaml"
+          echo "KUBELOUPE_LIMITED_KUBECONFIG=$HOME/.kube/kubeloupe-limited.yaml" >> "$GITHUB_ENV"
+
       - name: Build tests
         run: cargo test --test cluster --no-run
 

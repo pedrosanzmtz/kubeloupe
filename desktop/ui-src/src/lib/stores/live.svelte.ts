@@ -35,6 +35,10 @@ export class LiveTable {
   #retryTimer: ReturnType<typeof setTimeout> | null = null;
   #metricsTimer: ReturnType<typeof setInterval> | null = null;
   #ageTimer: ReturnType<typeof setInterval> | null = null;
+  /** What the current watch lists, for the "not allowed" message. */
+  #label = "";
+  #namespace: string | null = null;
+  #namespaced = false;
 
   /** Subscribe to the backend events; returns a cleanup function. */
   async listen(): Promise<() => void> {
@@ -67,6 +71,15 @@ export class LiveTable {
     } else if (ws.state === "reconnecting") {
       setStatus(false, "Reconnecting…");
       showError("Watch interrupted, retrying: " + ws.error);
+    } else if (ws.state === "forbidden") {
+      // The backend stopped the watch: retrying would get the same 403.
+      const where = !this.#namespaced
+        ? ""
+        : this.#namespace
+          ? ` in namespace ${this.#namespace}`
+          : " across all namespaces. Pick a namespace you have access to";
+      setStatus(false, "Not allowed");
+      showError(`You can't list ${this.#label}${where}. (${ws.error})`);
     } else {
       setStatus(null, "Connecting…");
     }
@@ -78,12 +91,13 @@ export class LiveTable {
     this.#starting = true;
     this.store.clear();
     this.#setWatchState({ id: "", state: "connecting" });
+    const ns = kind.resource.namespaced ? namespace || null : null;
+    this.#label = kind.label;
+    this.#namespace = ns;
+    this.#namespaced = kind.resource.namespaced;
     let id: string;
     try {
-      id = await commands.cmdWatchStart(
-        kind.resource,
-        kind.resource.namespaced ? namespace || null : null,
-      );
+      id = await commands.cmdWatchStart(kind.resource, ns);
     } catch (e) {
       if (token !== this.#token) return;
       this.#starting = false;

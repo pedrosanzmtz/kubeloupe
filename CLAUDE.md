@@ -15,8 +15,9 @@ User-facing docs are in `README.md`; the plan is the roadmap issue #24.
   `src/lib/bindings.ts` is generated; `src/test/` is the fake backend and the
   Playwright tests.
 - `tests/cluster.rs`: integration tests against the kind cluster.
-- `scripts/test-cluster/`: `setup.sh` (kind cluster, metrics-server) and
-  `demo.yaml` (the demo workload).
+- `scripts/test-cluster/`: `setup.sh` (kind cluster, metrics-server),
+  `demo.yaml` (the demo workload) and `limited-user.sh` (a namespace-scoped
+  user, opt-in).
 
 ## Rules
 
@@ -105,6 +106,14 @@ In `desktop/ui-src`:
   `demo/crashed`, `demo/multi` or `default/hungry`.
 - Node-level tests (cordon, drain) affect the whole cluster. They restore the
   node afterwards and only evict pods they created (`--pod-selector`).
+- RBAC: `bash scripts/test-cluster/limited-user.sh` creates a ServiceAccount
+  with `edit` in `team-a` only and writes a separate kubeconfig,
+  `~/.kube/kubeloupe-limited.yaml` (it never touches `~/.kube/config`). The
+  `limited_*` tests run as that user when
+  `KUBELOUPE_LIMITED_KUBECONFIG=~/.kube/kubeloupe-limited.yaml` is set, and
+  skip otherwise. Try the app as that user with
+  `KUBECONFIG=~/.kube/kubeloupe-limited.yaml cargo tauri dev`. The token
+  lasts 24h; re-run the script to refresh it.
 
 ## Parallel agents
 
