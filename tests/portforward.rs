@@ -36,8 +36,11 @@ where
     Fut: Future<Output = Result<()>>,
 {
     let client = connect().await?;
+    // A counter too: tests run in parallel in one process.
+    static SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let suffix = std::process::id() ^ chrono::Utc::now().timestamp_subsec_micros();
-    let ns = format!("{prefix}-{suffix:x}");
+    let ns = format!("{prefix}-{suffix:x}-{seq}");
     let namespaces: Api<Namespace> = Api::all(client.clone());
     let obj: Namespace = serde_json::from_value(serde_json::json!({
         "apiVersion": "v1", "kind": "Namespace", "metadata": { "name": ns }
@@ -153,7 +156,7 @@ fn target(kind: ForwardKind, ns: &str, name: &str) -> ForwardTarget {
 #[tokio::test]
 #[ignore]
 async fn service_forward_survives_deleting_the_serving_pod() -> Result<()> {
-    in_temp_ns("kl-it-pf", |client, ns| async move {
+    in_temp_ns("kl-it-pf-svc", |client, ns| async move {
         create_web(&client, &ns).await?;
         // EndpointSlices lag the pods a little.
         let svc = target(ForwardKind::Service, &ns, "web");
@@ -212,7 +215,7 @@ async fn service_forward_survives_deleting_the_serving_pod() -> Result<()> {
 #[tokio::test]
 #[ignore]
 async fn pod_forward_by_port_name_and_clear_errors() -> Result<()> {
-    in_temp_ns("kl-it-pf", |client, ns| async move {
+    in_temp_ns("kl-it-pf-pod", |client, ns| async move {
         create_web(&client, &ns).await?;
         let pod = ready_pods(&client, &ns).await?.remove(0);
 
