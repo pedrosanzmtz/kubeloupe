@@ -6,6 +6,7 @@ use std::sync::Mutex;
 use tauri_specta::{collect_commands, collect_events, Builder};
 
 mod commands;
+mod local_shell;
 mod log_streams;
 #[cfg(unix)]
 mod shell_env;
@@ -36,6 +37,10 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::exec::cmd_exec_input,
             commands::exec::cmd_exec_resize,
             commands::exec::cmd_exec_close,
+            commands::local_shell::cmd_local_shell_start,
+            commands::local_shell::cmd_local_shell_input,
+            commands::local_shell::cmd_local_shell_resize,
+            commands::local_shell::cmd_local_shell_close,
             commands::portforward::cmd_portforward_start,
             commands::portforward::cmd_portforward_stop,
             commands::portforward::cmd_portforward_list,
@@ -95,6 +100,7 @@ fn main() {
             client: tokio::sync::Mutex::new(None),
             log_streams: Default::default(),
             exec_sessions: Mutex::new(HashMap::new()),
+            local_shells: Mutex::new(HashMap::new()),
             forwards: Mutex::new(HashMap::new()),
             watches: Mutex::new(HashMap::new()),
             kinds: Mutex::new(Vec::new()),
@@ -108,8 +114,15 @@ fn main() {
             builder.mount_events(app);
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running kubeloupe");
+        .build(tauri::generate_context!())
+        .expect("error while building kubeloupe")
+        .run(|app, event| {
+            // Kill the local shells and delete their temp kubeconfigs.
+            if let tauri::RunEvent::Exit = event {
+                use tauri::Manager;
+                state::stop_all_local_shells(&app.state::<AppState>());
+            }
+        });
 }
 
 #[cfg(test)]

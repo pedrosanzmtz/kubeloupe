@@ -15,6 +15,7 @@ mod metrics;
 mod overview;
 mod pods;
 mod portforward;
+mod shell_kubeconfig;
 
 pub mod actions;
 pub mod auth;
@@ -34,4 +35,5 @@ pub use metrics::*;
 pub use overview::*;
 pub use pods::*;
 pub use portforward::*;
+pub use shell_kubeconfig::*;
 pub use workload_logs::*;

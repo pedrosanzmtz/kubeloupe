@@ -11,6 +11,7 @@ import { actionUi } from "./actions.svelte";
 import { createUi } from "./create.svelte";
 import { closeDetail, detail } from "./detail.svelte";
 import { toggleDock } from "./dock.svelte";
+import { openLocalShell } from "./localShell";
 import { unsaved } from "./unsaved.svelte";
 
 export const keyboard = $state({
@@ -149,6 +150,8 @@ export function handleKey(e: KeyboardEvent) {
       return;
     case "toggleDock":
       return done(e, toggleDock);
+    case "newLocalShell":
+      return done(e, openLocalShell);
     case "detailTab":
       if (tabs && hit.index < tabs.count()) done(e, () => tabs?.select(hit.index));
       return;

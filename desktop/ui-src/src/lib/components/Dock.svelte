@@ -2,9 +2,11 @@
   import DockPane from "./DockPane.svelte";
   import { clampHeight } from "../dock";
   import { activateDockTab, closeDockTab, dock, toggleDock, toggleMaximized } from "../stores/dock.svelte";
+  import { openLocalShell } from "../stores/localShell";
 
   /** Room kept for the header and the tables above a resized dock. */
   const KEEP_ABOVE = 160;
+  const NEW_SHELL_SHORTCUT = "Ctrl+Shift+`";
   const SHORTCUT = "Ctrl+\u0060";
 
   let drag: { y: number; height: number } | null = null;
@@ -57,7 +59,9 @@
               role="tab"
               class="label"
               aria-selected={t.id === dock.active}
-              title="{t.title} (double-click to maximize)"
+              title={t.type === "localShell"
+                ? `Local shell: kubectl uses ${t.title}. Changing the app's namespace does not change it. (double-click to maximize)`
+                : `${t.title} (double-click to maximize)`}
               onclick={() => activateDockTab(t.id)}
               ondblclick={() => {
                 activateDockTab(t.id);
@@ -69,6 +73,13 @@
             >
           </div>
         {/each}
+        <button
+          type="button"
+          class="ctl"
+          aria-label="New local terminal"
+          title="New local terminal ({NEW_SHELL_SHORTCUT})"
+          onclick={openLocalShell}>+</button
+        >
       </div>
       <button
         type="button"

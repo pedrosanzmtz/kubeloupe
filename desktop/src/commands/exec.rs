@@ -12,7 +12,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// The shell of a terminal session exited (payload: the session id).
 #[derive(Debug, Clone, Serialize, Type, Event)]
-pub(crate) struct ExecClosed(String);
+pub(crate) struct ExecClosed(pub(crate) String);
 
 /// Output of a terminal session.
 #[derive(Debug, Clone, Serialize, Type, Event)]
@@ -20,6 +20,17 @@ pub(crate) struct ExecOutput {
     session: String,
     stream: String,
     data: String,
+}
+
+impl ExecOutput {
+    /// Output of a local shell, which has a single stream.
+    pub(crate) fn stdout(session: String, data: String) -> Self {
+        ExecOutput {
+            session,
+            stream: "stdout".to_string(),
+            data,
+        }
+    }
 }
 
 /// Open an interactive shell in a pod. Returns the session id; output

@@ -12,6 +12,7 @@ base64 = "0.22"
 futures = "0.3"
 kube = { version = "2", features = ["ws"] }
 kubeloupe = { path = "..", features = ["specta"] }
+portable-pty = "0.9"
 serde = { version = "1", features = ["derive"] }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"

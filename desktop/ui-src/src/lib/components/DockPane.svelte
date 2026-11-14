@@ -17,6 +17,10 @@
   let ready = $state(false);
 
   onMount(async () => {
+    if (tab.type === "localShell") {
+      ready = true;
+      return;
+    }
     if (tab.type === "podLogs" && tab.containers) containers = tab.containers;
     if (
       tab.type === "workloadLogs" ||
@@ -43,8 +47,10 @@
     <LogViewer pod={tab.pod} {containers} {ready} hidden={!active} />
   {:else if tab.type === "workloadLogs"}
     <LogViewer workload={tab.workload} hidden={!active} />
+  {:else if tab.type === "localShell"}
+    <Terminal target={{ kind: "local", namespace: tab.namespace }} {active} />
   {:else if ready}
-    <Terminal pod={tab.pod} container={shell} {active} />
+    <Terminal target={{ kind: "pod", pod: tab.pod, container: shell }} {active} />
   {/if}
 </div>
 
