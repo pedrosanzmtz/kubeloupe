@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { column, openApp, openKind, row, rows } from "./helpers";
+import { column, openApp, openKind, row, rows, toggleNamespaces } from "./helpers";
 
 test("a watch snapshot renders rows", async ({ page }) => {
   const fake = await openApp(page);
@@ -26,7 +26,7 @@ test("the namespace selector restarts the watch for that namespace", async ({ pa
   await openKind(page, "Pods");
   await expect(rows(page)).toHaveCount(5);
 
-  await page.getByRole("combobox", { name: "Namespace" }).selectOption("kube-system");
+  await toggleNamespaces(page, "kube-system");
   await expect(rows(page)).toHaveCount(1);
   expect((await fake.lastCall("cmdWatchStart")).namespace).toBe("kube-system");
   expect(await fake.calls("cmdWatchStop")).toEqual([{ id: "watch-1" }]);

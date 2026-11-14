@@ -9,12 +9,17 @@
 
   let { kind }: { kind: ResourceKind } = $props();
 
-  // (Re)start the watch when the namespace changes or Refresh is pressed.
-  // The view itself is switched by remounting this component.
+  // Start the watches on mount and on Refresh. The view itself is switched
+  // by remounting this component.
   $effect(() => {
-    const ns = app.namespace;
     void app.refreshNonce;
-    untrack(() => live.start(kind, ns || null));
+    untrack(() => live.start(kind, app.selectedNamespaces));
+  });
+
+  // A namespace picked or dropped starts or stops just its own watch.
+  $effect(() => {
+    const namespaces = app.selectedNamespaces;
+    untrack(() => live.setNamespaces(namespaces));
   });
 
   onDestroy(() => live.stop());

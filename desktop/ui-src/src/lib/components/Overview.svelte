@@ -7,7 +7,7 @@
   import { onDestroy, untrack } from "svelte";
   import { commands, events } from "../bindings";
   import type { EventInfo, Overview_Serialize, OverviewStateChanged } from "../bindings";
-  import { app, kinds, openObject, setStatus, showError, stamp } from "../stores/app.svelte";
+  import { app, kinds, openObject, primaryNamespace, setStatus, showError, stamp } from "../stores/app.svelte";
   import { clusterError } from "../clusterError";
   import { formatAge } from "../format";
   import { capacityBars, eventKind, overviewCount, podCards } from "../overview";
@@ -89,17 +89,19 @@
       setStatus(false, err.status);
       setError(err.message);
       overview = null;
-      retry = setTimeout(() => start(app.namespace), RETRY_MS);
+      retry = setTimeout(() => start(namespace), RETRY_MS);
     }
   }
 
   // Start on mount, and again on Refresh or a context switch (both bump the
   // nonce) or when the start-up namespace arrives. The namespace only
-  // matters to users who cannot see the whole cluster.
+  // matters to users who cannot see the whole cluster; with several
+  // selected, the first one is the fallback.
+  const fallback = $derived(primaryNamespace());
   $effect(() => {
     void app.refreshNonce;
-    const namespace = app.namespace;
-    untrack(() => start(namespace));
+    const ns = fallback;
+    untrack(() => start(ns));
   });
 
   const ageTimer = setInterval(() => (now = Date.now()), AGE_TICK_MS);
