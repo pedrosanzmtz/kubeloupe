@@ -1,11 +1,12 @@
 //! Building a client for a kubeconfig context, and listing contexts.
 
 use crate::auth::{describe_client_error, prepare_exec, AuthTarget};
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use kube::config::KubeConfigOptions;
 use kube::Client;
 use serde::Serialize;
 use std::io::IsTerminal;
+use std::path::Path;
 
 /// Build a client for the given context (`None` = the kubeconfig's
 /// current-context), or from in-cluster config.
@@ -95,6 +96,25 @@ async fn connect(mut config: kube::Config, context: String, interactive: bool) -
         .await
         .map_err(|e| anyhow!(describe_client_error(&e, &target)))?;
     Ok(client)
+}
+
+/// Build a client for an explicit kubeconfig file and/or context: the CLI's
+/// `--kubeconfig` and `--context`. Without a file this is
+/// [`client_for_context_with`] (`KUBECONFIG`, `~/.kube/config`, then
+/// in-cluster config).
+pub async fn client_with(
+    kubeconfig: Option<&Path>,
+    context: Option<&str>,
+    interactive: bool,
+) -> Result<Client> {
+    match kubeconfig {
+        Some(path) => {
+            let kc = kube::config::Kubeconfig::read_from(path)
+                .with_context(|| format!("cannot read kubeconfig {}", path.display()))?;
+            client_from_kubeconfig(kc, context, interactive).await
+        }
+        None => client_for_context_with(context, interactive).await,
+    }
 }
 
 /// Build a client from the current kubeconfig (or in-cluster config).

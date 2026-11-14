@@ -52,6 +52,8 @@ export interface FakeCluster {
   bulkErrors: Record<string, string>;
   /** What `cmd_get_related` returns, by `kindId|rowKey` (default: nothing related). */
   related: Record<string, Related>;
+  /** `cmd_apply_manifests` rejects objects with these names (dry run included), with the given reason. */
+  applyErrors: Record<string, string>;
   overview: Overview_Serialize;
   metrics: MetricsSnapshot;
 }
@@ -230,6 +232,7 @@ export function defaultCluster(): FakeCluster {
     resourceVersions: {},
     bulkErrors: {},
     related: relatedFixtures(),
+    applyErrors: {},
     overview: {
       namespaces: 3,
       nodes: { total: 2, ready: 2 },

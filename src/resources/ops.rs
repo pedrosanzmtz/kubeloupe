@@ -25,7 +25,11 @@ pub fn dyn_api(client: &Client, r: &ResourceRef, namespace: Option<&str>) -> Api
 }
 
 /// Api for operating on one named object: a namespaced kind needs its namespace.
-fn object_api(client: &Client, r: &ResourceRef, namespace: &str) -> Result<Api<DynamicObject>> {
+pub(super) fn object_api(
+    client: &Client,
+    r: &ResourceRef,
+    namespace: &str,
+) -> Result<Api<DynamicObject>> {
     if r.namespaced && namespace.is_empty() {
         bail!("{} is namespaced: a namespace is required", r.kind);
     }
@@ -98,7 +102,14 @@ pub async fn get_resource_yaml(
     name: &str,
     reveal: bool,
 ) -> Result<String> {
-    let mut obj = get_resource(client, r, namespace, name).await?;
+    let obj = get_resource(client, r, namespace, name).await?;
+    to_yaml(object_value(r, obj, reveal)?)
+}
+
+/// An object as JSON for output: without `managedFields`, with `apiVersion`
+/// and `kind` filled in (lists leave them out), and Secret values replaced
+/// by [`REDACTED`] unless `reveal` is set.
+pub fn object_value(r: &ResourceRef, mut obj: DynamicObject, reveal: bool) -> Result<Value> {
     obj.metadata.managed_fields = None;
     let mut value = serde_json::to_value(&obj)?;
     if let Some(map) = value.as_object_mut() {
@@ -111,6 +122,11 @@ pub async fn get_resource_yaml(
     if is_secret(r) && !reveal {
         redact_secret(&mut value);
     }
+    Ok(value)
+}
+
+/// YAML with `apiVersion`, `kind` and `metadata` first.
+pub fn to_yaml(value: Value) -> Result<String> {
     Ok(serde_yaml::to_string(&ordered(value))?)
 }
 
@@ -241,37 +257,54 @@ pub async fn apply_resource_yaml_with(
 ) -> Result<ApplyOutcome> {
     let value = prepare_apply(r, name, yaml)?;
     let api = object_api(client, r, namespace)?;
+    Ok(apply_value(&api, name, value, opts).await?.0)
+}
+
+/// The apply of [`apply_resource_yaml_with`] on a checked document (see
+/// [`check_document`]). Also returns the object as the server answered it
+/// (stored, or what a dry run would store); `None` on a conflict.
+pub(super) async fn apply_value(
+    api: &Api<DynamicObject>,
+    name: &str,
+    value: Value,
+    opts: &ApplyOptions,
+) -> Result<(ApplyOutcome, Option<DynamicObject>)> {
     let expected = opts.resource_version.as_deref().filter(|v| !v.is_empty());
     if let Some(expected) = expected {
-        let current = current_resource_version(&api, name).await?;
+        let current = current_resource_version(api, name).await?;
         if current != expected {
-            return Ok(ApplyOutcome::Conflict {
-                resource_version: current,
-            });
+            return Ok((
+                ApplyOutcome::Conflict {
+                    resource_version: current,
+                },
+                None,
+            ));
         }
     }
 
     let patch = Patch::Apply(&value);
-    let takeovers = match api
+    let (takeovers, mut answer) = match api
         .patch(name, &PatchParams::apply(FIELD_MANAGER).dry_run(), &patch)
         .await
     {
-        Ok(_) => Vec::new(),
-        Err(kube::Error::Api(e)) if e.code == 409 => parse_apply_conflicts(&e.message),
+        Ok(obj) => (Vec::new(), Some(obj)),
+        Err(kube::Error::Api(e)) if e.code == 409 => (parse_apply_conflicts(&e.message), None),
         Err(e) => return Err(e.into()),
     };
     if opts.dry_run {
         // The non-forced dry run stops at the ownership conflicts; validate
         // the rest of the object the way the real save will send it.
         if !takeovers.is_empty() {
-            api.patch(
-                name,
-                &PatchParams::apply(FIELD_MANAGER).force().dry_run(),
-                &patch,
-            )
-            .await?;
+            answer = Some(
+                api.patch(
+                    name,
+                    &PatchParams::apply(FIELD_MANAGER).force().dry_run(),
+                    &patch,
+                )
+                .await?,
+            );
         }
-        return Ok(ApplyOutcome::Applied { takeovers });
+        return Ok((ApplyOutcome::Applied { takeovers }, answer));
     }
 
     let mut body = value;
@@ -289,14 +322,15 @@ pub async fn apply_resource_yaml_with(
         )
         .await
     {
-        Ok(_) => Ok(ApplyOutcome::Applied { takeovers }),
+        Ok(obj) => Ok((ApplyOutcome::Applied { takeovers }, Some(obj))),
         // A forced apply has no ownership conflicts: a 409 is the
         // resourceVersion precondition.
-        Err(kube::Error::Api(e)) if e.code == 409 && expected.is_some() => {
-            Ok(ApplyOutcome::Conflict {
-                resource_version: current_resource_version(&api, name).await?,
-            })
-        }
+        Err(kube::Error::Api(e)) if e.code == 409 && expected.is_some() => Ok((
+            ApplyOutcome::Conflict {
+                resource_version: current_resource_version(api, name).await?,
+            },
+            None,
+        )),
         Err(e) => Err(e.into()),
     }
 }
@@ -312,7 +346,13 @@ async fn current_resource_version(api: &Api<DynamicObject>, name: &str) -> Resul
 
 /// Parse and check edited YAML, and strip what the server owns.
 fn prepare_apply(r: &ResourceRef, name: &str, yaml: &str) -> Result<Value> {
-    let mut value: Value = serde_yaml::from_str(yaml).context("invalid YAML")?;
+    let value: Value = serde_yaml::from_str(yaml).context("invalid YAML")?;
+    check_document(r, name, value)
+}
+
+/// Check that a parsed document is the object `r`/`name` (and not a Secret
+/// with hidden values), and strip what the server owns.
+pub(super) fn check_document(r: &ResourceRef, name: &str, mut value: Value) -> Result<Value> {
     if !value.is_object() {
         bail!("the YAML must be a single Kubernetes object");
     }

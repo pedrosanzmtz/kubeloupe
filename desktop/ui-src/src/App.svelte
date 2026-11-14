@@ -6,6 +6,8 @@
   import ActionDialog from "./lib/components/ActionDialog.svelte";
   import ActionNotice from "./lib/components/ActionNotice.svelte";
   import UnsavedDialog from "./lib/components/UnsavedDialog.svelte";
+  import CreateDialog from "./lib/components/CreateDialog.svelte";
+  import { createUi } from "./lib/stores/create.svelte";
   import Footer from "./lib/components/Footer.svelte";
   import Toolbar from "./lib/components/Toolbar.svelte";
   import Overview from "./lib/components/Overview.svelte";
@@ -88,6 +90,9 @@
 </div>
 <Footer />
 <ActionDialog />
+{#if createUi.open}
+  <CreateDialog />
+{/if}
 <UnsavedDialog />
 
 <style>

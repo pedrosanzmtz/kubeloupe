@@ -33,6 +33,9 @@ Svelte) and a CLI, both built on the same Rust core.
 - **YAML editor** with server-side apply. After saving, it tells you which
   fields it took over from other field managers (for example from
   `kubectl` or a controller). Secret values stay hidden until you reveal them.
+- **Create from YAML** ("+ Create"): one or many documents, from a template
+  for the current kind, a file you open or drop. Validated with a server dry
+  run first; the results are listed per object.
 - **Actions** from the row menu, the detail panel or on several selected rows:
   scale, rollout restart, cordon/uncordon, drain (with progress, respecting
   PodDisruptionBudgets), trigger/suspend/resume a CronJob, delete and force
@@ -41,20 +44,31 @@ Svelte) and a CLI, both built on the same Rust core.
 
 ## CLI
 
-The CLI uses the current kubeconfig context. Run `kubeloupe --help` or
+The CLI uses the current kubeconfig context. Every command takes
+`--context NAME` and `--kubeconfig PATH` to use another context or file, so
+one script can work against several clusters. Run `kubeloupe --help` or
 `kubeloupe <command> --help` for every option.
+
+Output is meant for scripts too: results go to stdout, errors and log lines
+to stderr (no colour unless stderr is a terminal), a failure exits with
+status 1 and a usage error with 2. `get` with nothing to list prints
+"No resources found" on stderr and nothing on stdout. Commands on one named
+object (`describe`, `yaml`, `get <kind> <name>`) default to the context's
+namespace; lists default to all namespaces.
 
 | Command | What it does |
 |---|---|
-| `kubeloupe get <kind> [-n NS]` | List any resource type, built-in or custom (`deploy`, `svc`, `widgets.example.com`), with the same columns as the app |
+| `kubeloupe get <kind> [<name>] [-n NS] [-o FORMAT] [-l SEL] [--field-selector SEL]` | List any resource type, built-in or custom (`deploy`, `svc`, `widgets.example.com`), with the same columns as the app. `-o` is `table` (default), `wide` (adds labels, and IPs for pods and nodes), `yaml`, `json` or `name` (`deployment.apps/web`). Also `get <kind>/<name>` |
+| `kubeloupe describe <kind>/<name> [-n NS]` | Metadata, owners, labels and annotations, conditions, Secret keys (never values) and events of any object, like `kubectl describe` |
+| `kubeloupe yaml <kind>/<name> [-n NS] [--reveal]` | Print any object as YAML. Secret values are hidden unless `--reveal` is given (same for `get -o yaml\|json`). `yaml <pod>` is short for `yaml pod/<pod>` |
+| `kubeloupe completions <bash\|zsh\|fish\|powershell\|elvish>` | Print a shell completion script, e.g. `kubeloupe completions bash > ~/.local/share/bash-completion/completions/kubeloupe` |
 | `kubeloupe watch [<kind>] [-n NS]` | Print live changes to a resource type (default `pods`) until Ctrl-C |
 | `kubeloupe pods [-n NS]` | List pods (all namespaces by default) |
 | `kubeloupe namespaces` | List namespaces |
 | `kubeloupe nodes` | List nodes with readiness and kubelet version |
 | `kubeloupe logs <pod> [-n NS] [-c CONTAINER] [-p] [-f] [--tail N]` | A pod's logs: `-c` picks a container, `-p` the previous (crashed) instance, `-f` follows |
 | `kubeloupe logs deploy/<name>` (also `sts/`, `ds/`, `job/`) | The logs of every pod of a workload, as `[pod] line` |
-| `kubeloupe top [pods\|nodes]` | CPU/memory usage (needs metrics-server) |
-| `kubeloupe yaml <pod> [-n NS]` | Print a pod as YAML |
+| `kubeloupe top [pods\|nodes] [-n NS]` | CPU/memory usage (needs metrics-server); `-n` limits pods to one namespace |
 | `kubeloupe exec <pod> [-n NS] [-c CONTAINER] -- <command>` | Run a command in a pod and print its output |
 | `kubeloupe port-forward <pod> <port> [-n NS]` | Forward a pod port to a free local port until Ctrl-C |
 
@@ -70,6 +84,7 @@ PodDisruptionBudget). Namespaced actions default to the `default` namespace.
 | `kubeloupe trigger cronjob/<name> [-n NS]` | Create a Job from a CronJob now |
 | `kubeloupe suspend cronjob/<name> [-n NS]` / `resume cronjob/<name>` | Suspend or resume a CronJob |
 | `kubeloupe delete <kind>/<name> [-n NS] [--force]` | Delete an object of any kind. `--force` (pods only) uses grace period 0 |
+| `kubeloupe apply -f <file\|-> [-n NS] [--dry-run]` | Create or update the objects of a (multi-document) YAML file, like `kubectl apply`. Validated with a dry run first; nothing is applied if any object fails |
 
 ## Install
 
