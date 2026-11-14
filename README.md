@@ -32,6 +32,11 @@ Svelte) and a CLI, both built on the same Rust core.
   port-forwarding to localhost.
 - **Workload logs**: follow every pod of a Deployment, StatefulSet, DaemonSet
   or Job in one stream, including pods that a rollout replaces.
+- **Dock**: logs and terminals open in tabs at the bottom of the window, so
+  several run at once and keep running when you close the panel or switch
+  views. Open them from a panel or the right-click menu (Logs, Shell); drag
+  the top edge to resize, double-click a tab to maximize, Ctrl+` to hide or
+  show it. At most 10 log streams run at once.
 - **YAML editor** with server-side apply. After saving, it tells you which
   fields it took over from other field managers (for example from
   `kubectl` or a controller). Secret values stay hidden until you reveal them.
