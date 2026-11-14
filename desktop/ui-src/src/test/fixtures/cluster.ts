@@ -4,11 +4,11 @@
 
 import type {
   ColumnKind,
-  ContextInfo,
+  ContextInfo_Serialize,
   FieldTakeover,
   MetricsSnapshot,
   NamespaceInfo,
-  Overview,
+  Overview_Serialize,
   PodDetail,
   ResourceKind,
   ResourceRow,
@@ -16,12 +16,20 @@ import type {
 import { DISCOVERED } from "./discover";
 
 export interface FakeCluster {
-  contexts: ContextInfo[];
-  namespaces: NamespaceInfo[];
+  contexts: ContextInfo_Serialize[];
+  /** `null`: listing namespaces is forbidden (a namespace-scoped user). */
+  namespaces: NamespaceInfo[] | null;
+  /** What `cmd_default_namespace` returns (`null` = all namespaces). */
+  defaultNamespace: string | null;
   /** What `cmd_discover` returns. */
   kinds: ResourceKind[];
-  /** Kind ids `cmd_check_access` denies. */
+  /** Kind ids `cmd_check_access` denies, in every scope. */
   denied: string[];
+  /**
+   * Kind ids denied across all namespaces only: `cmd_check_access` denies
+   * them without a namespace, and their watches end with a 403 there.
+   */
+  deniedClusterWide: string[];
   /** Rows by kind id; watches serve these. */
   rows: Record<string, ResourceRow[]>;
   /** Pod details by `namespace/name`. */
@@ -34,7 +42,7 @@ export interface FakeCluster {
   nextTakeovers: FieldTakeover[];
   /** `cmd_bulk_delete` fails these row keys with the given reason. */
   bulkErrors: Record<string, string>;
-  overview: Overview;
+  overview: Overview_Serialize;
   metrics: MetricsSnapshot;
 }
 
@@ -91,9 +99,10 @@ export function defaultCluster(): FakeCluster {
 
   return {
     contexts: [
-      { name: "kind-dev", current: true },
-      { name: "prod", current: false },
+      { name: "kind-dev", current: true, namespace: null },
+      { name: "prod", current: false, namespace: null },
     ],
+    defaultNamespace: null,
     namespaces: ["default", "demo", "kube-system"].map((name) => ({
       name,
       status: "Active",
@@ -102,6 +111,7 @@ export function defaultCluster(): FakeCluster {
     })),
     kinds,
     denied: ["rbac.authorization.k8s.io/v1/clusterroles", "v1/componentstatuses"],
+    deniedClusterWide: [],
     rows: {
       "v1/pods": [
         pod("demo", "web-1", "Running"),
@@ -160,17 +170,20 @@ export function defaultCluster(): FakeCluster {
     bulkErrors: {},
     overview: {
       namespaces: 3,
-      nodes: 2,
-      nodes_ready: 2,
-      pods_total: 5,
-      pods_running: 3,
-      pods_pending: 1,
-      pods_failed: 1,
-      pods_by_namespace: [
-        ["demo", 4],
-        ["kube-system", 1],
-      ],
-      events: [],
+      nodes: { total: 2, ready: 2 },
+      pods: {
+        namespace: null,
+        total: 5,
+        running: 3,
+        pending: 1,
+        failed: 1,
+        by_namespace: [
+          ["demo", 4],
+          ["kube-system", 1],
+        ],
+      },
+      events: { namespace: null, items: [] },
+      notes: [],
     },
     metrics: {
       available: true,
