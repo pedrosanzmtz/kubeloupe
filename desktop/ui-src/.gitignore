@@ -1,2 +1,5 @@
 node_modules
 dist
+# Playwright output (screenshots and traces of failed tests, HTML report).
+/test-results/
+/playwright-report/
