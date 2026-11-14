@@ -169,6 +169,18 @@ pub enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Create or update objects from a YAML file (like kubectl apply -f)
+    Apply {
+        /// Manifest file, or `-` for stdin; may hold many documents
+        #[arg(short, long)]
+        file: String,
+        /// Namespace for objects that have none (default: the context's)
+        #[arg(short, long)]
+        namespace: Option<String>,
+        /// Validate on the server only; store nothing
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Print an object of any kind as YAML (Secret values hidden)
     Yaml {
         /// `<kind>/<name>` (`deploy/web`), or a pod name
@@ -279,6 +291,17 @@ mod tests {
         };
         assert_eq!(output, OutputFormat::Yaml);
         assert_eq!(name.as_deref(), Some("web"));
+    }
+
+    #[test]
+    fn apply_takes_the_global_flags() {
+        let cli = parse(&["apply", "-f", "-", "--dry-run", "--context", "c"]);
+        assert_eq!(cli.context.as_deref(), Some("c"));
+        let Commands::Apply { file, dry_run, .. } = cli.command else {
+            panic!("not apply");
+        };
+        assert_eq!(file, "-");
+        assert!(dry_run);
     }
 
     #[test]

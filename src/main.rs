@@ -229,6 +229,11 @@ async fn run(cli: Cli) -> Result<()> {
             namespace,
             force,
         } => cli_delete(&client, &target, namespace.as_deref(), force).await?,
+        Commands::Apply {
+            file,
+            namespace,
+            dry_run,
+        } => kubeloupe::resources::cli_apply(&client, &file, namespace.as_deref(), dry_run).await?,
         Commands::Yaml {
             target,
             namespace,

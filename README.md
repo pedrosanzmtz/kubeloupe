@@ -33,6 +33,9 @@ Svelte) and a CLI, both built on the same Rust core.
 - **YAML editor** with server-side apply. After saving, it tells you which
   fields it took over from other field managers (for example from
   `kubectl` or a controller). Secret values stay hidden until you reveal them.
+- **Create from YAML** ("+ Create"): one or many documents, from a template
+  for the current kind, a file you open or drop. Validated with a server dry
+  run first; the results are listed per object.
 - **Actions** from the row menu, the detail panel or on several selected rows:
   scale, rollout restart, cordon/uncordon, drain (with progress, respecting
   PodDisruptionBudgets), trigger/suspend/resume a CronJob, delete and force
@@ -81,6 +84,7 @@ PodDisruptionBudget). Namespaced actions default to the `default` namespace.
 | `kubeloupe trigger cronjob/<name> [-n NS]` | Create a Job from a CronJob now |
 | `kubeloupe suspend cronjob/<name> [-n NS]` / `resume cronjob/<name>` | Suspend or resume a CronJob |
 | `kubeloupe delete <kind>/<name> [-n NS] [--force]` | Delete an object of any kind. `--force` (pods only) uses grace period 0 |
+| `kubeloupe apply -f <file\|-> [-n NS] [--dry-run]` | Create or update the objects of a (multi-document) YAML file, like `kubectl apply`. Validated with a dry run first; nothing is applied if any object fails |
 
 ## Install
 

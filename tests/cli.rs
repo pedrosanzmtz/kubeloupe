@@ -71,6 +71,33 @@ fn bad_arguments_exit_with_usage_error() {
 
 #[test]
 #[ignore]
+fn cli_apply_dry_run_with_context_and_missing_file() {
+    let manifest = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("cli-apply.yaml");
+    std::fs::write(
+        &manifest,
+        "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: kl-cli-dry-run\ndata:\n  a: b\n",
+    )
+    .unwrap();
+    let out = on_cluster(&[
+        "apply",
+        "-f",
+        manifest.to_str().unwrap(),
+        "-n",
+        "demo",
+        "--dry-run",
+    ]);
+    assert_eq!(out, "configmap/kl-cli-dry-run created (dry run)\n");
+    let ctx = context();
+    let out = kubeloupe(&["--context", &ctx, "apply", "-f", "/nonexistent.yaml"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(out.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).starts_with("error: cannot read /nonexistent.yaml")
+    );
+}
+
+#[test]
+#[ignore]
 fn cli_context_and_names() {
     let out = on_cluster(&["get", "pods", "-n", "demo", "-o", "name"]);
     let names: Vec<_> = out.lines().collect();
