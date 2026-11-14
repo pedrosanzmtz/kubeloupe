@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
-import { openApp, openKind } from "./helpers";
+import { openApp, openKind, toggleNamespaces } from "./helpers";
 
 /** The number on the overview card labelled `label`. */
 function card(page: Page, label: string) {
@@ -54,7 +54,7 @@ test("coming back to the overview starts one new feed in the current namespace",
   await expect(card(page, "Pods")).toHaveText("5");
   // The namespace control is in the toolbar of the table views.
   await openKind(page, "Pods");
-  await page.getByRole("combobox", { name: "Namespace" }).selectOption("demo");
+  await toggleNamespaces(page, "demo");
   await page.getByRole("navigation").getByRole("button", { name: "Overview" }).click();
   await expect(card(page, "Pods")).toHaveText("5");
   // One start per visit, each stopped when leaving.
@@ -113,7 +113,7 @@ test("metrics are fetched only for what the table shows", async ({ page }) => {
   const fake = await openApp(page);
   await openKind(page, "Pods");
   await expect.poll(async () => (await fake.calls("cmdGetMetrics")).at(-1)).toEqual({ namespace: null, what: "pods" });
-  await page.getByRole("combobox", { name: "Namespace" }).selectOption("demo");
+  await toggleNamespaces(page, "demo");
   await expect.poll(async () => (await fake.calls("cmdGetMetrics")).at(-1)).toEqual({ namespace: "demo", what: "pods" });
   await openKind(page, "Nodes");
   await expect.poll(async () => (await fake.calls("cmdGetMetrics")).at(-1)).toEqual({ namespace: null, what: "nodes" });

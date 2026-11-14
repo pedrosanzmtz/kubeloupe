@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { openApp, openKind } from "./helpers";
+import { namespaceButton, namespacePopover, openApp, openKind, toggleNamespaces } from "./helpers";
 
 // A namespace-scoped user: a RoleBinding in team-a, nothing cluster-wide
 // (scripts/test-cluster/limited-user.sh is the real-cluster version).
@@ -52,13 +52,44 @@ test("a namespace-scoped user starts on its namespace with a usable sidebar", as
   await expect(page.locator("header")).toContainText("Live");
 
   // Namespaces cannot be listed: the control takes free text.
-  const ns = page.getByRole("combobox", { name: "Namespace" });
-  await expect(ns).toHaveValue("team-a");
-  await ns.fill("team-b");
-  await ns.press("Enter");
+  await expect(namespaceButton(page)).toHaveText("team-a");
+  await namespaceButton(page).click();
+  const search = page.getByRole("searchbox", { name: "Search namespaces" });
+  await search.fill("team-b");
+  await search.press("Enter");
   await expect.poll(async () => (await fake.lastCall("cmdWatchStart")).namespace).toBe("team-b");
-  await expect(page.locator("#known-namespaces option")).toHaveCount(2);
+  // Added to the selection, next to team-a, and offered from now on.
+  await expect(namespaceButton(page)).toHaveText("2 namespaces");
+  await expect(namespacePopover(page).getByRole("group").getByRole("checkbox")).toHaveCount(2);
+  expect((await fake.activeWatches()).map((w) => w.namespace)).toEqual(["team-a", "team-b"]);
+
+  // Unticking team-a leaves team-b alone, and it is still offered.
+  await namespacePopover(page).getByRole("checkbox", { name: "team-a", exact: true }).click();
+  await expect(namespaceButton(page)).toHaveText("team-b");
+  await expect(namespacePopover(page).getByRole("group").getByRole("checkbox")).toHaveCount(2);
+  expect((await fake.activeWatches()).map((w) => w.namespace)).toEqual(["team-b"]);
   expect(fake.errors).toEqual([]);
+});
+
+test("a namespace the user may not list shows on its own, the others stay live", async ({ page }) => {
+  const fake = await openApp(page, (cluster) => {
+    cluster.deniedNamespaces = ["kube-system"];
+  });
+  await openKind(page, "Pods");
+  await toggleNamespaces(page, "demo", "kube-system");
+  await expect(page.getByRole("alert")).toHaveText(
+    "You can't list Pods in namespace kube-system. (pods is forbidden)",
+  );
+  await expect(page.locator("header")).toContainText("Not allowed in kube-system");
+  // demo's rows are there and its watch keeps running.
+  await expect(page.getByText("4 of 4 items")).toBeVisible();
+  expect((await fake.activeWatches()).map((w) => w.namespace)).toEqual(["demo", "kube-system"]);
+
+  // Dropping the forbidden one makes the table live again.
+  await page.getByRole("button", { name: "Remove kube-system" }).click();
+  await expect(page.locator("header")).toContainText("Live");
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByText("4 of 4 items")).toBeVisible();
 });
 
 test("a kind denied across all namespaces opens, says why, and does not retry", async ({ page }) => {
@@ -80,7 +111,7 @@ test("a kind denied across all namespaces opens, says why, and does not retry", 
   expect(await fake.calls("cmdWatchStart")).toHaveLength(1);
 
   // Picking a namespace re-checks access there and watches it.
-  await page.getByRole("combobox", { name: "Namespace" }).selectOption("demo");
+  await toggleNamespaces(page, "demo");
   await expect(pods).not.toHaveClass(/denied/);
   await expect(page.locator("header")).toContainText("Live");
   expect((await fake.lastCall("cmdCheckAccess")).namespace).toBe("demo");
