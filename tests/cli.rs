@@ -241,3 +241,27 @@ async fn cli_selectors_formats_and_secret_reveal() -> Result<()> {
     let _ = namespaces.delete(&ns, &DeleteParams::background()).await;
     result
 }
+
+/// `top pods -n` asks for that namespace's metrics only, so a user limited to
+/// it (scripts/test-cluster/limited-user.sh) can use it. Skips unless
+/// KUBELOUPE_LIMITED_KUBECONFIG is set.
+#[test]
+#[ignore]
+fn cli_top_pods_in_a_namespace_works_for_a_limited_user() {
+    let Ok(kubeconfig) = std::env::var("KUBELOUPE_LIMITED_KUBECONFIG") else {
+        eprintln!("KUBELOUPE_LIMITED_KUBECONFIG not set; skipping");
+        return;
+    };
+    let out = kubeloupe(&["--kubeconfig", &kubeconfig, "top", "pods", "-n", "team-a"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.starts_with("NAME"), "{stdout}");
+    assert!(
+        stdout.lines().skip(1).all(|l| l.contains("team-a")),
+        "{stdout}"
+    );
+}
