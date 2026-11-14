@@ -1,14 +1,13 @@
 // Table headers keep the literal column names inline with their widths.
 #![allow(clippy::print_literal)]
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use futures::{AsyncBufReadExt, TryStreamExt};
 use k8s_openapi::api::core::v1::{Event, Namespace, Node, Pod};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
 use kube::api::{
-    Api, ApiResource, AttachParams, AttachedProcess, DynamicObject, ListParams, LogParams, Patch,
-    PatchParams,
+    Api, ApiResource, AttachParams, AttachedProcess, DynamicObject, ListParams, LogParams,
 };
 use kube::config::KubeConfigOptions;
 use kube::core::GroupVersionKind;
@@ -17,6 +16,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use tokio::io::AsyncReadExt;
 
+pub mod resources;
 pub mod watch;
 pub mod workload_logs;
 pub use workload_logs::*;
@@ -86,11 +86,19 @@ fn kubeconfig_has_proxy(kubeconfig: &kube::config::Kubeconfig, context: Option<&
         .unwrap_or(false)
 }
 
+/// Age text for a creation time in unix seconds (empty if unknown).
+pub(crate) fn age_of_secs(secs: i64) -> String {
+    DateTime::from_timestamp(secs, 0)
+        .filter(|_| secs > 0)
+        .map(format_age)
+        .unwrap_or_default()
+}
+
 fn age_of(ts: Option<Time>) -> String {
     ts.map(|t| format_age(t.0)).unwrap_or_default()
 }
 
-fn format_age(t: DateTime<Utc>) -> String {
+pub(crate) fn format_age(t: DateTime<Utc>) -> String {
     let secs = (Utc::now() - t).num_seconds().max(0);
     if secs < 60 {
         format!("{}s", secs)
@@ -215,7 +223,7 @@ pub async fn list_contexts() -> Result<Vec<ContextInfo>> {
         .collect())
 }
 
-fn created_secs(ts: &Option<Time>) -> i64 {
+pub(crate) fn created_secs(ts: &Option<Time>) -> i64 {
     ts.as_ref().map(|t| t.0.timestamp()).unwrap_or_default()
 }
 
@@ -875,18 +883,22 @@ pub async fn get_node_metrics(client: &Client) -> Result<Option<Vec<NodeUsage>>>
 }
 
 // ---------------------------------------------------------------------------
-// Pod YAML: read a pod as YAML, apply edited YAML with server-side apply.
+// Pod YAML: thin wrappers over the generic resource YAML.
 // ---------------------------------------------------------------------------
 
-/// Fetch one pod as YAML (status and managed fields stripped, so the
-/// document is what a human would edit).
+fn pod_ref() -> resources::ResourceRef {
+    resources::ResourceRef {
+        group: String::new(),
+        version: "v1".into(),
+        kind: "Pod".into(),
+        plural: "pods".into(),
+        namespaced: true,
+    }
+}
+
+/// Fetch one pod as YAML (without managed fields).
 pub async fn get_pod_yaml(client: &Client, namespace: &str, name: &str) -> Result<String> {
-    let pods: Api<Pod> = Api::namespaced(client.clone(), namespace);
-    let mut pod = pods.get(name).await?;
-    pod.metadata.managed_fields = None;
-    pod.status = None;
-    // k8s-openapi already serializes apiVersion/kind for the Pod.
-    Ok(serde_yaml::to_string(&pod)?)
+    resources::get_resource_yaml(client, &pod_ref(), namespace, name, false).await
 }
 
 /// Apply edited pod YAML with server-side apply (field manager "kubeloupe").
@@ -896,16 +908,7 @@ pub async fn apply_pod_yaml(
     name: &str,
     yaml: &str,
 ) -> Result<()> {
-    let value: serde_json::Value = serde_yaml::from_str(yaml)?;
-    let ar = ApiResource::from_gvk(&GroupVersionKind::gvk("", "v1", "Pod"));
-    let api: Api<DynamicObject> = Api::namespaced_with(client.clone(), namespace, &ar);
-    api.patch(
-        name,
-        &PatchParams::apply("kubeloupe"),
-        &Patch::Apply(&value),
-    )
-    .await?;
-    Ok(())
+    resources::apply_resource_yaml(client, &pod_ref(), namespace, name, yaml).await
 }
 
 // ---------------------------------------------------------------------------
@@ -1164,6 +1167,21 @@ pub async fn exec_in_pod(
 }
 
 /// Print live changes to pods, nodes or namespaces until interrupted.
+/// `kubeloupe get <kind> [-n ns]`: list any kind, built-in or custom, as a
+/// table.
+pub async fn print_get(client: &Client, resource: &str, namespace: Option<&str>) -> Result<()> {
+    let kinds = resources::discover(client).await?;
+    let kind = resources::resolve_kind(&kinds, resource)
+        .with_context(|| format!("unknown resource type: {resource}"))?;
+    let rows = resources::list_resources(client, kind, namespace).await?;
+    if rows.is_empty() {
+        println!("No resources found.");
+    } else {
+        print!("{}", resources::render_table(kind, &rows));
+    }
+    Ok(())
+}
+
 pub async fn watch_and_print(
     client: &Client,
     resource: &str,
@@ -1189,14 +1207,11 @@ pub async fn watch_and_print(
             }
         }
     }
-    match resource {
-        "pods" => run_batched(watch::watch_pods(client, namespace).1, DEFAULT_FLUSH, print).await,
-        "nodes" => run_batched(watch::watch_nodes(client).1, DEFAULT_FLUSH, print).await,
-        "namespaces" => run_batched(watch::watch_namespaces(client).1, DEFAULT_FLUSH, print).await,
-        other => {
-            anyhow::bail!("unknown resource for watch: {other} (use pods, nodes or namespaces)")
-        }
-    }
+    let kinds = resources::discover(client).await?;
+    let kind = resources::resolve_kind(&kinds, resource)
+        .with_context(|| format!("unknown resource type: {resource}"))?;
+    let (_store, updates) = watch::watch_resource(client, kind, namespace);
+    run_batched(updates, DEFAULT_FLUSH, print).await;
     Ok(())
 }
 

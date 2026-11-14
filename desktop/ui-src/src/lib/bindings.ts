@@ -6,9 +6,11 @@ import * as __TAURI_EVENT from "@tauri-apps/api/event";
 
 /** Commands */
 export const commands = {
-	cmdListPods: (namespace: string | null, options?: InvokeOptions) => __TAURI_INVOKE<PodInfo[]>("cmd_list_pods", { namespace }, options),
 	cmdListNamespaces: (options?: InvokeOptions) => __TAURI_INVOKE<NamespaceInfo[]>("cmd_list_namespaces", undefined, options),
-	cmdListNodes: (options?: InvokeOptions) => __TAURI_INVOKE<NodeInfo[]>("cmd_list_nodes", undefined, options),
+	/**  Discover every kind the cluster serves (including CRDs) with its columns. */
+	cmdDiscover: (options?: InvokeOptions) => __TAURI_INVOKE<ResourceKind[]>("cmd_discover", undefined, options),
+	/**  Which of the kinds the current user may list. */
+	cmdCheckAccess: (kinds: ResourceRef[], options?: InvokeOptions) => __TAURI_INVOKE<AccessResult[]>("cmd_check_access", { kinds }, options),
 	cmdGetPodDetails: (namespace: string, name: string, options?: InvokeOptions) => __TAURI_INVOKE<PodDetail>("cmd_get_pod_details", { namespace, name }, options),
 	cmdStreamPodLogs: (namespace: string, name: string, container: string | null, previous: boolean | null, tailLines: number | null, sinceSeconds: number | null, timestamps: boolean | null, streamId: number, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_stream_pod_logs", { namespace, name, container, previous, tailLines, sinceSeconds, timestamps, streamId }, options),
 	cmdStopPodLogs: (options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_stop_pod_logs", undefined, options),
@@ -19,8 +21,11 @@ export const commands = {
 	 *  log stream or a context switch.
 	 */
 	cmdStreamWorkloadLogs: (kind: string, namespace: string, name: string, options: WorkloadLogOptions_Deserialize, streamId: number, _options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_stream_workload_logs", { kind, namespace, name, options, streamId }, _options),
-	/**  Stop a workload log stream (and every per-pod task under it). */
-	cmdStopWorkloadLogs: (options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_stop_workload_logs", undefined, options),
+	/**
+	 *  Stop a workload log stream (and every per-pod task under it), unless a
+	 *  newer stream has already replaced it.
+	 */
+	cmdStopWorkloadLogs: (streamId: number, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_stop_workload_logs", { streamId }, options),
 	/**
 	 *  Save log text to the user's Downloads folder and return the path. A
 	 *  webview Blob download is not reliable across the platforms Tauri targets
@@ -30,11 +35,10 @@ export const commands = {
 	cmdGetOverview: (options?: InvokeOptions) => __TAURI_INVOKE<Overview>("cmd_get_overview", undefined, options),
 	cmdGetMetrics: (options?: InvokeOptions) => __TAURI_INVOKE<MetricsSnapshot>("cmd_get_metrics", undefined, options),
 	/**
-	 *  Start watching `kind` ("pods", "nodes" or "namespaces"). Returns the
-	 *  watch id carried by the `watch-batch` / `watch-state` events. The first
-	 *  batch is a full snapshot; later ones are incremental.
+	 *  Start watching a kind (in `namespace`, if it is namespaced). Returns the
+	 *  watch id carried by the `watch-batch` / `watch-state` events.
 	 */
-	cmdWatchStart: (kind: string, namespace: string | null, options?: InvokeOptions) => __TAURI_INVOKE<string>("cmd_watch_start", { kind, namespace }, options),
+	cmdWatchStart: (resource: ResourceRef, namespace: string | null, options?: InvokeOptions) => __TAURI_INVOKE<string>("cmd_watch_start", { resource, namespace }, options),
 	cmdWatchStop: (id: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_watch_stop", { id }, options),
 	cmdListContexts: (options?: InvokeOptions) => __TAURI_INVOKE<ContextInfo[]>("cmd_list_contexts", undefined, options),
 	cmdSetContext: (name: string | null, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_set_context", { name }, options),
@@ -52,8 +56,11 @@ export const commands = {
 	 */
 	cmdPortforwardStart: (namespace: string, name: string, port: number, options?: InvokeOptions) => __TAURI_INVOKE<PortForwardInfo>("cmd_portforward_start", { namespace, name, port }, options),
 	cmdPortforwardStop: (session: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_portforward_stop", { session }, options),
-	cmdGetPodYaml: (namespace: string, name: string, options?: InvokeOptions) => __TAURI_INVOKE<string>("cmd_get_pod_yaml", { namespace, name }, options),
-	cmdApplyPodYaml: (namespace: string, name: string, yaml: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_apply_pod_yaml", { namespace, name, yaml }, options),
+	cmdGetResourceDetail: (resource: ResourceRef, namespace: string, name: string, options?: InvokeOptions) => __TAURI_INVOKE<ResourceDetail>("cmd_get_resource_detail", { resource, namespace, name }, options),
+	/**  An object as YAML. Secret values stay hidden unless `reveal` is set. */
+	cmdGetResourceYaml: (resource: ResourceRef, namespace: string, name: string, reveal: boolean, options?: InvokeOptions) => __TAURI_INVOKE<string>("cmd_get_resource_yaml", { resource, namespace, name, reveal }, options),
+	cmdApplyResourceYaml: (resource: ResourceRef, namespace: string, name: string, yaml: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_apply_resource_yaml", { resource, namespace, name, yaml }, options),
+	cmdDeleteResource: (resource: ResourceRef, namespace: string, name: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_delete_resource", { resource, namespace, name }, options),
 };
 
 /** Events */
@@ -70,6 +77,45 @@ export const events = {
 };
 
 /* Types */
+/**  Result of an access check for one kind. */
+export type AccessResult = {
+	id: string,
+	allowed: boolean,
+};
+
+/**  Where a kind appears in the sidebar. */
+export type Category = "workloads" | "network" | "config" | "storage" | "cluster" | 
+/**  CRDs, grouped by API group. */
+"custom" | 
+/**  Anything else the server serves (leases, apiservices, ...). */
+"other";
+
+/**  A table column as the UI sees it. */
+export type ColumnDef = {
+	key: string,
+	label: string,
+	kind: ColumnKind,
+};
+
+/**  How a column's cell is produced and rendered. */
+export type ColumnKind = "text" | 
+/**  Sorted numerically. */
+"number" | 
+/**  Derived from the creation time by the UI, so it stays fresh. */
+"age" | 
+/**  Coloured by value (Running, Pending, Failed, ...). */
+"status" | 
+/**  Live usage merged in by the UI from the metrics API. */
+"podCpu" | "podMemory" | "nodeCpu" | "nodeMemory";
+
+export type ConditionInfo = {
+	type: string,
+	status: string,
+	reason: string,
+	message: string,
+	age: string,
+};
+
 export type ContainerInfo = {
 	name: string,
 	image: string,
@@ -122,15 +168,6 @@ export type NamespaceInfo = {
 	age: string,
 };
 
-export type NodeInfo = {
-	/**  Creation time (unix seconds) so a UI can keep `age` fresh itself. */
-	created: number,
-	name: string,
-	ready: string,
-	version: string,
-	age: string,
-};
-
 export type NodeUsage = {
 	name: string,
 	cpu_millicores: number,
@@ -151,6 +188,13 @@ export type Overview = {
 	events: EventInfo[],
 };
 
+export type OwnerLink = {
+	api_version: string,
+	kind: string,
+	name: string,
+	controller: boolean,
+};
+
 export type PodDetail = {
 	name: string,
 	namespace: string,
@@ -162,16 +206,6 @@ export type PodDetail = {
 	containers: ContainerInfo[],
 	/**  Every container in the spec, init containers first, for the log picker. */
 	log_containers: LogContainer[],
-};
-
-export type PodInfo = {
-	/**  Creation time (unix seconds) so a UI can keep `age` fresh itself. */
-	created: number,
-	name: string,
-	namespace: string,
-	phase: string,
-	node: string,
-	age: string,
 };
 
 /**
@@ -206,6 +240,78 @@ export type PortForwardInfo = {
 	local_port: number,
 };
 
+export type RelatedEvent = {
+	type: string,
+	reason: string,
+	message: string,
+	count: number,
+	age: string,
+};
+
+/**  Everything the generic detail panel shows besides the YAML. */
+export type ResourceDetail = {
+	name: string,
+	namespace: string,
+	uid: string,
+	api_version: string,
+	kind: string,
+	created: number,
+	age: string,
+	labels: { [key in string]: string },
+	annotations: { [key in string]: string },
+	finalizers: string[],
+	owners: OwnerLink[],
+	conditions: ConditionInfo[],
+	/**  Keys of a Secret's data (never the values). */
+	secret_keys: SecretKey[],
+	events: RelatedEvent[],
+};
+
+/**  One entry of the sidebar: a discovered resource type with its columns. */
+export type ResourceKind = {
+	resource: ResourceRef,
+	/**  [`ResourceRef::id`]. */
+	id: string,
+	/**  Display name ("Deployments", "Network Policies"). */
+	label: string,
+	category: Category,
+	/**  Defined by a CustomResourceDefinition. */
+	crd: boolean,
+	verbs: string[],
+	short_names: string[],
+	columns: ColumnDef[],
+};
+
+/**  Identifies a resource type well enough to build an `Api<DynamicObject>`. */
+export type ResourceRef = {
+	/**  API group; empty for the core group. */
+	group: string,
+	version: string,
+	kind: string,
+	plural: string,
+	namespaced: boolean,
+};
+
+/**
+ *  A row of a resource table: identity plus one cell per column. Columns the
+ *  UI fills itself (age, metrics) have an empty cell.
+ */
+export type ResourceRow = {
+	/**  `namespace/name`, or `name` for cluster-scoped objects. */
+	key: string,
+	name: string,
+	namespace: string,
+	/**  Creation time (unix seconds). */
+	created: number,
+	cells: string[],
+};
+
+export type SecretKey = {
+	key: string,
+	/**  Decoded size in bytes. */
+	bytes: number,
+};
+
 /**  A log line and where it came from. */
 export type TaggedLine = {
 	pod: string,
@@ -214,16 +320,14 @@ export type TaggedLine = {
 };
 
 /**
- *  Payload of the `watch-batch` event. Which variant arrives depends on the
- *  `kind` the watch was started with; the variants are not tagged on the wire.
+ *  One coalesced set of table rows for the watch `id`: the first batch is a
+ *  full snapshot, later ones are incremental.
  */
-export type WatchBatch = WatchBatchOf<PodInfo> | WatchBatchOf<NodeInfo> | WatchBatchOf<NamespaceInfo>;
-
-/**  One coalesced set of changes for the watch `id`. */
-export type WatchBatchOf<T> = {
+export type WatchBatch = {
 	id: string,
 	snapshot: boolean,
-	applied: T[],
+	applied: ResourceRow[],
+	/**  Keys of removed rows. */
 	deleted: string[],
 };
 

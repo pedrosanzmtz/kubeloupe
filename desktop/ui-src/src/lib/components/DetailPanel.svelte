@@ -7,9 +7,12 @@
   import { commands } from "../bindings";
   import type { PodDetail } from "../bindings";
   import { closeDetail } from "../stores/detail.svelte";
-  import type { PodRef } from "../stores/detail.svelte";
+  import type { Target } from "../stores/detail.svelte";
 
-  let { pod }: { pod: PodRef } = $props();
+  /** The pod panel: containers, logs, terminal and port-forward on top of
+   *  the generic YAML editor. Every other kind uses `GenericDetail`. */
+  let { target }: { target: Target } = $props();
+  const pod = $derived({ namespace: target.namespace, name: target.name });
 
   let info = $state.raw<PodDetail | null>(null);
   let loadError = $state("");
@@ -87,7 +90,7 @@
   {/if}
 
   <PortForward {pod} />
-  <YamlEditor {pod} />
+  <YamlEditor {target} />
 </aside>
 
 <style>

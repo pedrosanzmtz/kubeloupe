@@ -16,9 +16,15 @@ streaming logs and watching cluster state.
   Pods, Namespaces and Nodes views, with namespace filter, search and
   30s auto-refresh; click a pod for its details and live logs, an
   interactive terminal (pod exec via xterm.js), port-forwarding to
-  localhost, and a YAML editor with server-side apply; Pods and Nodes
+  localhost, and a YAML editor with server-side apply; every resource
+  type the cluster serves (workloads, network, config, storage, CRDs) can be
+  browsed, edited and deleted from a Lens-style grouped sidebar, with
+  Secret values hidden until revealed; Pods and Nodes
   show CPU/memory usage when the metrics API is available; switch
   clusters from the context selector in the header (see below)
+- `kubeloupe get <kind> [-n <namespace>]` — list any resource type found by
+  API discovery, built-in or custom (`deploy`, `svc`, `widgets.example.com`),
+  with the same columns as the desktop app
 - `kubeloupe pods` — list pods across all namespaces (name, namespace, phase, node)
 - `kubeloupe pods -n <namespace>` — list pods in one namespace
 - `kubeloupe namespaces` — list namespaces
