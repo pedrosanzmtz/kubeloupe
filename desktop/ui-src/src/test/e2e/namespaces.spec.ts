@@ -38,7 +38,7 @@ test("a snapshot from one namespace's watch does not remove the other's rows", a
 
   // demo relists with a single pod: kube-system's coredns-1 stays.
   await fake.emitWatchBatch({ id: demo.id, snapshot: true, applied: [fake.podRow("demo", "web-9")] });
-  await expect.poll(() => column(page, "Name")).toEqual(["coredns-1", "web-9"]);
+  await expect.poll(async () => (await column(page, "Name")).sort()).toEqual(["coredns-1", "web-9"]);
 
   // And the other way round.
   await fake.emitWatchBatch({ id: kubeSystem.id, snapshot: true, applied: [] });
@@ -110,6 +110,20 @@ test("the control is usable from the keyboard and searches", async ({ page }) =>
   await expect(namespacePopover(page)).toHaveCount(0);
   await expect(namespaceButton(page)).toBeFocused();
   expect((await fake.activeWatches()).map((w) => w.namespace)).toEqual(["kube-system", "demo"]);
+});
+
+test("a namespace picked in the palette is shown on its own", async ({ page }) => {
+  const fake = await openApp(page);
+  await openKind(page, "Pods");
+  await toggleNamespaces(page, "demo", "kube-system");
+  await expect(rows(page)).toHaveCount(5);
+
+  await page.keyboard.press("ControlOrMeta+k");
+  await page.keyboard.type("ns kube");
+  await page.keyboard.press("Enter");
+  await expect(namespaceButton(page)).toHaveText("kube-system");
+  await expect(rows(page)).toHaveCount(1);
+  expect((await fake.activeWatches()).map((w) => w.namespace)).toEqual(["kube-system"]);
 });
 
 test("the selection is capped at 10 namespaces, suggesting All", async ({ page }) => {

@@ -72,12 +72,13 @@ export function paletteItems(): PaletteItem[] {
     });
   }
 
+  // Picking a namespace shows only that one (the toolbar control adds more).
   const namespaces = app.namespacesForbidden ? app.knownNamespaces : app.namespaces.map((n) => n.name);
   items.push({
     id: "ns:",
     group: "Namespace",
     label: "All namespaces",
-    detail: app.namespace === "" ? "current" : undefined,
+    detail: app.selectedNamespaces.length === 0 ? "current" : undefined,
     run: () => switchNamespace(""),
   });
   for (const ns of namespaces) {
@@ -85,7 +86,7 @@ export function paletteItems(): PaletteItem[] {
       id: `ns:${ns}`,
       group: "Namespace",
       label: ns,
-      detail: ns === app.namespace ? "current" : undefined,
+      detail: app.selectedNamespaces.includes(ns) ? "current" : undefined,
       run: () => switchNamespace(ns),
     });
   }

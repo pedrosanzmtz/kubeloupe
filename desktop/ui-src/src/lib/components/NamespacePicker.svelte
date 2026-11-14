@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { tick } from "svelte";
+  import { tick, untrack } from "svelte";
   import { app, setNamespaces } from "../stores/app.svelte";
+  import { keyboard } from "../stores/keyboard.svelte";
   import { filterNamespaces, MAX_NAMESPACES, namespacesLabel, toggleNamespace } from "../namespaces";
 
   // The namespace control: a button that opens a searchable checkbox list,
@@ -25,6 +26,15 @@
   const typed = $derived(query.trim());
   /** A typed namespace that is not offered yet (free text, when not listable). */
   const addable = $derived(app.namespacesForbidden && typed !== "" && !options.includes(typed));
+
+  // While open it handles its own keys (Esc, arrows), like a context menu.
+  $effect(() => {
+    if (!open) return;
+    untrack(() => (keyboard.menus += 1));
+    return () => {
+      untrack(() => (keyboard.menus -= 1));
+    };
+  });
 
   async function show() {
     open = true;

@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
-import { openApp, openKind, row, rows } from "./helpers";
+import { namespaceButton, openApp, openKind, row, rows } from "./helpers";
 
 const palette = (page: Page) => page.getByRole("dialog", { name: "Command palette" });
 const paletteInput = (page: Page) => palette(page).getByRole("combobox");
@@ -48,7 +48,7 @@ test("palette prefixes: namespaces, actions, objects and Create resource…", as
   await page.keyboard.type("ns kube");
   await expect(options(page)).toHaveText(["kube-system"]);
   await page.keyboard.press("Enter");
-  await expect(page.getByRole("combobox", { name: "Namespace" })).toHaveValue("kube-system");
+  await expect(namespaceButton(page)).toHaveText("kube-system");
   await expect(rows(page)).toHaveCount(1);
 
   // An object of the current table opens its detail panel.
