@@ -528,7 +528,7 @@ pub(super) fn columns_for(resource: &ResourceRef, printer: &[PrinterColumn]) -> 
 
 // --- Derived columns --------------------------------------------------------
 
-fn pod_ready(v: &Value) -> String {
+pub(super) fn pod_ready(v: &Value) -> String {
     let total = array_at(v, "/spec/containers").count();
     let ready = array_at(v, "/status/containerStatuses")
         .filter(|c| c.get("ready") == Some(&Value::Bool(true)))
@@ -536,7 +536,7 @@ fn pod_ready(v: &Value) -> String {
     format!("{ready}/{total}")
 }
 
-fn pod_restarts(v: &Value) -> String {
+pub(super) fn pod_restarts(v: &Value) -> String {
     array_at(v, "/status/containerStatuses")
         .filter_map(|c| c.get("restartCount").and_then(Value::as_i64))
         .sum::<i64>()
@@ -546,7 +546,7 @@ fn pod_restarts(v: &Value) -> String {
 /// The phase, refined the way `kubectl get pods` does: a terminating pod or
 /// a container that is waiting (CrashLoopBackOff, ImagePullBackOff, ...)
 /// says more than "Running" / "Pending".
-fn pod_status(v: &Value) -> String {
+pub(super) fn pod_status(v: &Value) -> String {
     if v.pointer("/metadata/deletionTimestamp").is_some() {
         return "Terminating".into();
     }
@@ -570,7 +570,7 @@ fn service_external_ip(v: &Value) -> String {
     path_str(v, ".spec.externalIPs")
 }
 
-fn service_ports(v: &Value) -> String {
+pub(super) fn service_ports(v: &Value) -> String {
     array_at(v, "/spec/ports")
         .map(|p| {
             let proto = p.get("protocol").and_then(Value::as_str).unwrap_or("TCP");
@@ -592,7 +592,7 @@ fn ingress_hosts(v: &Value) -> String {
 }
 
 /// At most three items, then "+N more".
-fn abbreviate(items: Vec<String>) -> String {
+pub(super) fn abbreviate(items: Vec<String>) -> String {
     const MAX: usize = 3;
     let extra = items.len().saturating_sub(MAX);
     let mut out = items.into_iter().take(MAX).collect::<Vec<_>>().join(",");

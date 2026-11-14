@@ -88,6 +88,11 @@ export const commands = {
 	cmdPortforwardStop: (session: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_portforward_stop", { session }, options),
 	/**  Detail of any object; pods include their `pod` section. */
 	cmdGetResourceDetail: (resource: ResourceRef, namespace: string, name: string, options?: InvokeOptions) => __TAURI_INVOKE<ResourceDetail>("cmd_get_resource_detail", { resource, namespace, name }, options),
+	/**
+	 *  The per-kind summary and related objects of any object (a Deployment's
+	 *  ReplicaSets and pods, a Service's endpoints, the pods on a Node...).
+	 */
+	cmdGetRelated: (resource: ResourceRef, namespace: string, name: string, options?: InvokeOptions) => __TAURI_INVOKE<Related>("cmd_get_related", { resource, namespace, name }, options),
 	/**  An object as YAML. Secret values stay hidden unless `reveal` is set. */
 	cmdGetResourceYaml: (resource: ResourceRef, namespace: string, name: string, reveal: boolean, options?: InvokeOptions) => __TAURI_INVOKE<string>("cmd_get_resource_yaml", { resource, namespace, name, reveal }, options),
 	/**
@@ -409,6 +414,11 @@ export type ExecOutput = {
 	data: string,
 };
 
+export type Fact = {
+	label: string,
+	value: string,
+};
+
 /**  Fields an apply took over from another field manager. */
 export type FieldTakeover = {
 	/**  The manager that owned the fields (e.g. "kubectl-create", "helm"). */
@@ -708,12 +718,51 @@ export type RecentEvents_Serialize = {
 	items: EventInfo[],
 };
 
+/**  The per-kind part of the detail panel. */
+export type Related = {
+	/**
+	 *  The one-line summary, in parts ("3/3 ready", "RollingUpdate 25%/25%",
+	 *  "revision 4"); shown joined with " · ".
+	 */
+	summary: string[],
+	/**  Labelled facts ("Rollout": "complete", "Kubelet": "v1.31.0"). */
+	facts: Fact[],
+	groups: RelatedGroup[],
+};
+
 export type RelatedEvent = {
 	type: string,
 	reason: string,
 	message: string,
 	count: number,
 	age: string,
+};
+
+/**  A small table of related objects (or of plain rows: ports, taints). */
+export type RelatedGroup = {
+	title: string,
+	/**
+	 *  apiVersion and kind of the rows' objects; both empty when the rows
+	 *  are not objects (ports, taints, metrics).
+	 */
+	api_version: string,
+	kind: string,
+	columns: string[],
+	/**  Index of the column that names the row's object (shown as a link). */
+	name_column: number,
+	items: RelatedItem[],
+	/**  Why the group could not be loaded; empty if it was. */
+	error: string,
+};
+
+/**
+ *  One row: the object it stands for (empty for plain rows) and its cells,
+ *  one per column.
+ */
+export type RelatedItem = {
+	namespace: string,
+	name: string,
+	cells: string[],
 };
 
 /**  Everything the detail panel shows besides the YAML. */
