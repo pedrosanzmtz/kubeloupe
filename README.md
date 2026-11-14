@@ -171,8 +171,9 @@ cd desktop && cargo tauri dev                     # starts Vite on :1420 and the
 
 A debug build loads the UI from the Vite dev server, so
 `cargo run -p kubeloupe-desktop` on its own shows a connection error unless
-`npm --prefix desktop/ui-src run dev` is running. `cargo tauri build` makes a
-release build with the UI bundled.
+`npm --prefix desktop/ui-src run dev` is running. `cd desktop && cargo tauri
+build` builds the UI (`npm run build` in `desktop/ui-src`) and makes a release
+build with it bundled; add `--no-bundle` to skip the installers.
 
 ## Test cluster
 

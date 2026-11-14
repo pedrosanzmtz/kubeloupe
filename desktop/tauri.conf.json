@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.kubeloupe.app",
   "build": {
-    "beforeDevCommand": "npm --prefix ui-src run dev",
+    "beforeDevCommand": { "script": "npm run dev", "cwd": "ui-src" },
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm --prefix ui-src run build",
+    "beforeBuildCommand": { "script": "npm run build", "cwd": "ui-src" },
     "frontendDist": "ui-src/dist"
   },
   "app": {

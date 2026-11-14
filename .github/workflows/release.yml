@@ -175,14 +175,11 @@ jobs:
           cache: npm
           cache-dependency-path: desktop/ui-src/package-lock.json
 
-      # Build the frontend here rather than through tauri.conf.json's
-      # beforeBuildCommand: Tauri runs that hook from the frontend directory
-      # it detects (desktop/ui-src), where `npm --prefix ui-src` points at a
-      # nonexistent desktop/ui-src/ui-src. The --config below disables it.
-      - name: Build the frontend
-        run: |
-          npm ci
-          npm run build
+      # `cargo tauri build` then builds the frontend itself through
+      # tauri.conf.json's beforeBuildCommand (`npm run build` in ui-src), the
+      # same way a local build does.
+      - name: Install the frontend dependencies
+        run: npm ci
         working-directory: desktop/ui-src
 
       - name: Install the Tauri CLI
@@ -214,7 +211,7 @@ jobs:
           uploadUpdaterJson: false
           args: >-
             ${{ matrix.args }}
-            --config '{"build":{"beforeBuildCommand":null},"bundle":{"icon":["icons/32x32.png","icons/128x128.png","icons/128x128@2x.png","icons/icon.icns","icons/icon.ico"]}}'
+            --config '{"bundle":{"icon":["icons/32x32.png","icons/128x128.png","icons/128x128@2x.png","icons/icon.icns","icons/icon.ico"]}}'
 
       - name: Collect the bundles
         shell: bash
