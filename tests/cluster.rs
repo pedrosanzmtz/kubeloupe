@@ -35,7 +35,7 @@ use kubeloupe::{
     apply_pod_yaml, client_for_context, default_namespace, exec_command, get_namespaces, get_nodes,
     get_overview, get_pod_logs, get_pod_metrics, get_pod_yaml, get_pods, is_forbidden,
     list_namespaces_if_allowed, pod_ref, serve_port_forward, stream_pod_logs, stream_workload_logs,
-    LogOptions, WorkloadEvent, WorkloadKind,
+    watch_overview, LogOptions, OverviewUpdate, WorkloadEvent, WorkloadKind,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -910,7 +910,9 @@ async fn metrics_become_available() -> Result<()> {
     let client = connect().await?;
     // metrics-server needs a while after start before it reports anything.
     let pods = eventually("pod metrics", Duration::from_secs(240), || async {
-        Ok(get_pod_metrics(&client).await?.filter(|m| !m.is_empty()))
+        Ok(get_pod_metrics(&client, None)
+            .await?
+            .filter(|m| !m.is_empty()))
     })
     .await?;
     ensure!(pods.iter().any(|m| m.namespace == "kube-system"));
@@ -1553,6 +1555,144 @@ async fn drain_scenario(client: &Client, ns: &str, node: &str) -> Result<()> {
     )
     .await?;
     ensure!(summary.complete() && summary.evicted == 1, "{summary:?}");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// The live overview.
+// ---------------------------------------------------------------------------
+
+/// The next overview summary that satisfies `pred`.
+async fn overview_until(
+    what: &str,
+    updates: &mut futures::stream::BoxStream<'static, OverviewUpdate>,
+    pred: impl Fn(&kubeloupe::Overview) -> bool,
+) -> Result<kubeloupe::Overview> {
+    within(what, TIMEOUT, async {
+        while let Some(u) = updates.next().await {
+            if let OverviewUpdate::Summary(ov) = u {
+                if pred(&ov) {
+                    return Ok(*ov);
+                }
+            }
+        }
+        bail!("overview stream ended")
+    })
+    .await
+}
+
+fn pods_in(ov: &kubeloupe::Overview, ns: &str) -> usize {
+    ov.pods
+        .as_ref()
+        .and_then(|p| p.by_namespace.iter().find(|(n, _)| n == ns))
+        .map_or(0, |(_, n)| *n)
+}
+
+#[tokio::test]
+#[ignore]
+async fn live_overview_follows_a_pod_without_polling() -> Result<()> {
+    in_temp_ns("kl-it-ov", |client, ns| async move {
+        let mut updates = watch_overview(&client, None);
+        let first = overview_until("first summary", &mut updates, |_| true).await?;
+        ensure!(first.notes.is_empty(), "{:?}", first.notes);
+        ensure!(pods_in(&first, &ns) == 0);
+        ensure!(first
+            .capacity
+            .as_ref()
+            .is_some_and(|c| c.cpu_allocatable_millicores > 0));
+
+        let pods: Api<Pod> = Api::namespaced(client.clone(), &ns);
+        pods.create(&PostParams::default(), &sleeper_pod("ov"))
+            .await?;
+        overview_until("pod counted", &mut updates, |ov| pods_in(ov, &ns) == 1).await?;
+
+        pods.delete("ov", &DeleteParams::default()).await?;
+        overview_until("pod gone", &mut updates, |ov| pods_in(ov, &ns) == 0).await?;
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+#[ignore]
+async fn overview_lists_the_crash_looping_demo_pod_as_a_problem() -> Result<()> {
+    let client = connect().await?;
+    let ov = within("overview", TIMEOUT, get_overview(&client, None)).await?;
+    let pods = ov.pods.context("pods")?;
+    let crashed = pods
+        .problems
+        .iter()
+        .find(|p| p.namespace == "demo" && p.name == "crashed")
+        .with_context(|| format!("demo/crashed is not a problem pod: {:?}", pods.problems))?;
+    // Between restarts it is briefly Running but not ready, or Error.
+    ensure!(
+        ["CrashLoopBackOff", "Not ready", "Error"].contains(&crashed.reason.as_str()),
+        "{crashed:?}"
+    );
+    ensure!(pods.waiting_errors + pods.running <= pods.total);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore]
+async fn overview_events_are_warnings_linked_to_their_object() -> Result<()> {
+    in_temp_ns("kl-it-ovev", |client, ns| async move {
+        let event: k8s_openapi::api::core::v1::Event = serde_json::from_value(serde_json::json!({
+            "metadata": { "name": "it-warning", "namespace": ns },
+            "involvedObject": { "apiVersion": "v1", "kind": "ConfigMap", "name": "cm", "namespace": ns },
+            "reason": "ItWarning", "message": "from the integration test", "type": "Warning",
+            "lastTimestamp": chrono::Utc::now().to_rfc3339(), "count": 1
+        }))?;
+        let normal = serde_json::json!({
+            "metadata": { "name": "it-normal", "namespace": ns },
+            "involvedObject": { "apiVersion": "v1", "kind": "ConfigMap", "name": "cm", "namespace": ns },
+            "reason": "ItNormal", "message": "fine", "type": "Normal",
+            "lastTimestamp": chrono::Utc::now().to_rfc3339(), "count": 1
+        });
+        let events: Api<k8s_openapi::api::core::v1::Event> = Api::namespaced(client.clone(), &ns);
+        events
+            .create(&PostParams::default(), &serde_json::from_value(normal)?)
+            .await?;
+        let mut updates = watch_overview(&client, None);
+        overview_until("first summary", &mut updates, |_| true).await?;
+        events.create(&PostParams::default(), &event).await?;
+        let ov = overview_until("warning listed", &mut updates, |ov| {
+            ov.events
+                .as_ref()
+                .is_some_and(|e| e.items.iter().any(|i| i.reason == "ItWarning"))
+        })
+        .await?;
+        let items = ov.events.context("events")?.items;
+        ensure!(items.iter().all(|i| i.kind == "Warning"), "{items:?}");
+        let e = items.iter().find(|i| i.reason == "ItWarning").unwrap();
+        ensure!(
+            (e.object_kind.as_str(), e.object_name.as_str(), e.object_namespace.as_str())
+                == ("ConfigMap", "cm", ns.as_str()),
+            "{e:?}"
+        );
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+#[ignore]
+async fn pod_metrics_can_be_scoped_to_a_namespace() -> Result<()> {
+    let client = connect().await?;
+    let pods = eventually(
+        "pod metrics in kube-system",
+        Duration::from_secs(240),
+        || async {
+            Ok(get_pod_metrics(&client, Some("kube-system"))
+                .await?
+                .filter(|m| !m.is_empty()))
+        },
+    )
+    .await?;
+    ensure!(
+        pods.iter().all(|m| m.namespace == "kube-system"),
+        "{pods:?}"
+    );
     Ok(())
 }
 

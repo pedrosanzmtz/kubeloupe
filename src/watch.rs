@@ -347,6 +347,37 @@ where
     let store = writer.as_reader();
     let events =
         reflector::reflector(writer, watcher::watcher(api, config).default_backoff()).boxed();
+    (store, track(events, convert))
+}
+
+/// Like [`watch_with_config`], but without a reflector store: only the
+/// summaries exist, so memory stays proportional to what `convert` keeps.
+/// For consumers that fold the updates into their own state (the overview).
+pub fn watch_summaries<K, T>(
+    api: Api<K>,
+    config: watcher::Config,
+    convert: impl Fn(&K) -> T + Send + 'static,
+) -> BoxStream<'static, Update<T>>
+where
+    K: Resource + Clone + DeserializeOwned + Debug + Send + 'static,
+    T: Send + 'static,
+{
+    track(
+        watcher::watcher(api, config).default_backoff().boxed(),
+        convert,
+    )
+}
+
+/// Turn raw watcher events into [`Update`]s: [`WatchState::Connecting`]
+/// first, and the end right after a 403.
+fn track<K, T>(
+    events: BoxStream<'static, Result<Event<K>, watcher::Error>>,
+    convert: impl Fn(&K) -> T + Send + 'static,
+) -> BoxStream<'static, Update<T>>
+where
+    K: Send + 'static,
+    T: Send + 'static,
+{
     let tracker = Tracker {
         init: Vec::new(),
         live: false,
@@ -370,7 +401,7 @@ where
     let first = stream::once(futures::future::ready(Update::State(
         WatchState::Connecting,
     )));
-    (store, first.chain(updates).boxed())
+    first.chain(updates).boxed()
 }
 
 /// [`watch_with`] for a typed resource.

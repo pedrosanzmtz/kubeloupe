@@ -1,6 +1,6 @@
 import { commands, events } from "../bindings";
 import type { WatchBatch, WatchStateChanged } from "../bindings";
-import type { ResourceKind } from "../bindings";
+import type { MetricsKind, ResourceKind } from "../bindings";
 import { EMPTY_METRICS, isNode, isPod } from "../columns";
 import type { Metrics, Row } from "../columns";
 import { setStatus, showError, stamp } from "./app.svelte";
@@ -114,10 +114,11 @@ export class LiveTable {
     this.#watchId = id;
     this.#starting = false;
     for (const ev of this.#buffer.splice(0)) this.#onEvent(ev);
-    if (isPod(kind) || isNode(kind)) {
-      // Only pods and nodes have metric columns.
-      this.loadMetrics();
-      this.#metricsTimer = setInterval(() => this.loadMetrics(), METRICS_INTERVAL_MS);
+    // Only pods and nodes have metric columns; poll just the one on screen.
+    const what: MetricsKind | null = isPod(kind) ? "pods" : isNode(kind) ? "nodes" : null;
+    if (what) {
+      this.loadMetrics(what);
+      this.#metricsTimer = setInterval(() => this.loadMetrics(what), METRICS_INTERVAL_MS);
     }
     this.#ageTimer = setInterval(() => (this.now = Date.now()), AGE_INTERVAL_MS);
   }
@@ -136,11 +137,12 @@ export class LiveTable {
   }
 
   /** Metrics can't be watched: poll them and merge into the live rows. */
-  async loadMetrics() {
+  async loadMetrics(what: MetricsKind) {
     const token = this.#token;
     let next: Metrics = EMPTY_METRICS;
     try {
-      const snap = await commands.cmdGetMetrics();
+      // Pod metrics only for the namespace the table shows.
+      const snap = await commands.cmdGetMetrics(this.#namespace, what);
       if (token !== this.#token) return;
       next = {
         pods: new Map(snap.pods.map((p) => [`${p.namespace}/${p.name}`, p])),

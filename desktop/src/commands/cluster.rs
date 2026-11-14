@@ -1,4 +1,4 @@
-//! Contexts, namespaces, the overview, metrics, discovery and access checks.
+//! Contexts, namespaces, metrics, discovery and access checks.
 
 use crate::state::{
     client, selected_context, stop_all_exec, stop_all_forwards, stop_all_watches, stop_log_stream,
@@ -6,10 +6,10 @@ use crate::state::{
 };
 use kubeloupe::resources::{self, AccessResult, ResourceKind, ResourceRef};
 use kubeloupe::{
-    default_namespace, get_node_metrics, get_overview, get_pod_metrics, list_contexts,
-    list_namespaces_if_allowed, ContextInfo, NamespaceInfo, NodeUsage, Overview, PodUsage,
+    default_namespace, get_node_metrics, get_pod_metrics, list_contexts,
+    list_namespaces_if_allowed, ContextInfo, NamespaceInfo, NodeUsage, PodUsage,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::State;
 
@@ -38,20 +38,6 @@ pub(crate) async fn cmd_default_namespace(
     Ok(default_namespace(&client).await)
 }
 
-/// The overview. Parts the user may not see cluster-wide are narrowed to
-/// `namespace` (`null` = the context's namespace) or left out.
-#[tauri::command]
-#[specta::specta]
-pub(crate) async fn cmd_get_overview(
-    state: State<'_, AppState>,
-    namespace: Option<String>,
-) -> Result<Overview, String> {
-    let client = client(&state).await?;
-    get_overview(&client, namespace.as_deref())
-        .await
-        .map_err(|e| e.to_string())
-}
-
 #[derive(Debug, Clone, Serialize, Type)]
 pub(crate) struct MetricsSnapshot {
     available: bool,
@@ -59,13 +45,31 @@ pub(crate) struct MetricsSnapshot {
     nodes: Vec<NodeUsage>,
 }
 
+/// Which metrics a view shows.
+#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum MetricsKind {
+    Pods,
+    Nodes,
+}
+
+/// Usage for what is on screen: pod metrics in `namespace` (`null` = all
+/// namespaces), or node metrics (`namespace` is ignored). The other list
+/// is empty.
 #[tauri::command]
 #[specta::specta]
-pub(crate) async fn cmd_get_metrics(state: State<'_, AppState>) -> Result<MetricsSnapshot, String> {
+pub(crate) async fn cmd_get_metrics(
+    state: State<'_, AppState>,
+    namespace: Option<String>,
+    what: MetricsKind,
+) -> Result<MetricsSnapshot, String> {
     let client = client(&state).await?;
-    let (pods, nodes) = tokio::join!(get_pod_metrics(&client), get_node_metrics(&client),);
+    let (pods, nodes) = match what {
+        MetricsKind::Pods => (get_pod_metrics(&client, namespace.as_deref()).await, None),
+        MetricsKind::Nodes => (Ok(None), Some(get_node_metrics(&client).await)),
+    };
     let pods = pods.map_err(|e| e.to_string())?;
-    let nodes = nodes.map_err(|e| e.to_string())?;
+    let nodes = nodes.transpose().map_err(|e| e.to_string())?.flatten();
     let available = pods.is_some() || nodes.is_some();
     Ok(MetricsSnapshot {
         available,
