@@ -24,6 +24,8 @@ import { defaultSettings } from "../../lib/settings";
 import type { Settings } from "../../lib/settings";
 import { DISCOVERED } from "./discover";
 import { relatedFixtures } from "./related";
+import { defaultHelm } from "./helm";
+import type { FakeHelm } from "./helm";
 import { sparkFixtures, usageFixtures } from "./usage";
 
 export interface FakeCluster {
@@ -68,6 +70,8 @@ export interface FakeCluster {
   servicePorts: Record<string, ServicePortInfo[]>;
   overview: Overview_Serialize;
   metrics: MetricsSnapshot;
+  /** Helm releases (`cmd_helm_*`). */
+  helm: FakeHelm;
   /**
    * What `cmd_get_settings` returns. The fake keeps changes in
    * sessionStorage, so they survive a page reload (an app restart).
@@ -354,6 +358,7 @@ export function defaultCluster(): FakeCluster {
         },
       ],
     },
+    helm: defaultHelm(),
     settings: defaultSettings(),
   };
 }

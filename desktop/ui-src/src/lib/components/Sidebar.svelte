@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Category, ResourceKind } from "../bindings";
   import { app, canOpenDenied, deniedReason, kinds, setView } from "../stores/app.svelte";
+  import { HELM_VIEW } from "../helm";
   import { PORT_FORWARDS_VIEW } from "../forwards";
   import { forwards, refreshForwards } from "../stores/forwards.svelte";
   import { untrack } from "svelte";
@@ -101,6 +102,11 @@
       {/if}
     {/if}
   {/each}
+
+  {#if kinds.loaded && kinds.all.length > 0}
+    <h4>Helm</h4>
+    <button type="button" class:active={app.view === HELM_VIEW} onclick={() => setView(HELM_VIEW)}>Releases</button>
+  {/if}
 
   {@render groups("Custom Resources", custom)}
   {@render groups("Other", other)}

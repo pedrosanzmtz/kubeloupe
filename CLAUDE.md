@@ -104,6 +104,9 @@ In `desktop/ui-src`:
   `KUBELOUPE_TEST_CONTEXT` to use another context.
 - New cluster tests are `#[ignore]`d and create what they need in a temporary
   namespace (`in_temp_ns`), which they delete afterwards.
+- `tests/helm_cluster.rs` needs `helm` (on `PATH`, or the binary in
+  `KUBELOUPE_HELM`); it skips without it, except in CI. It installs
+  `scripts/test-cluster/charts/demo-chart` in a temporary namespace.
 - The demo objects are shared: don't change `demo/web`, `demo/logger`,
   `demo/crashed`, `demo/multi` or `default/hungry`.
 - Node-level tests (cordon, drain) affect the whole cluster. They restore the
