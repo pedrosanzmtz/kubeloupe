@@ -50,6 +50,10 @@ export class Fake {
     return this.page.evaluate(() => window.__fake.lastWatchId());
   }
 
+  activeWatches(): Promise<{ id: string; namespace: string | null }[]> {
+    return this.page.evaluate(() => window.__fake.activeWatches());
+  }
+
   lastStreamId(): Promise<number | null> {
     return this.page.evaluate(() => window.__fake.lastStreamId());
   }
@@ -145,4 +149,21 @@ export async function column(page: Page, label: string): Promise<string[]> {
   expect(i, `column ${label}`).toBeGreaterThan(0);
   // Cell 0 is the checkbox, like header 0.
   return rows(page).evaluateAll((els, idx) => els.map((el) => el.children[idx]?.textContent?.trim() ?? ""), i);
+}
+
+/** The namespace control's button and its popover. */
+export function namespaceButton(page: Page): Locator {
+  return page.getByRole("button", { name: "Namespace", exact: true });
+}
+
+export function namespacePopover(page: Page): Locator {
+  return page.getByRole("dialog", { name: "Namespaces" });
+}
+
+/** Tick (or untick) namespaces in the namespace control, then close it. */
+export async function toggleNamespaces(page: Page, ...names: string[]) {
+  await namespaceButton(page).click();
+  for (const ns of names) await namespacePopover(page).getByRole("checkbox", { name: ns, exact: true }).click();
+  await page.keyboard.press("Escape");
+  await expect(namespacePopover(page)).toHaveCount(0);
 }

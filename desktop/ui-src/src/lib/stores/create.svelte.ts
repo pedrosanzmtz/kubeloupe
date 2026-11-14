@@ -1,7 +1,7 @@
 // "+ Create": the dialog that creates objects from YAML.
 
 import { templateFor } from "../templates";
-import { app, currentKind } from "./app.svelte";
+import { currentKind, primaryNamespace } from "./app.svelte";
 
 export const createUi = $state({
   open: false,
@@ -13,9 +13,11 @@ export const createUi = $state({
 
 /** Open the dialog with a template for the current kind and namespace. */
 export function openCreate() {
-  // All namespaces ("") means "default" (the backend does the same).
-  createUi.initial = templateFor(currentKind()?.resource ?? null, app.namespace);
-  createUi.namespace = app.namespace;
+  // All namespaces ("") means "default" (the backend does the same); with
+  // several namespaces, the first one picked.
+  const namespace = primaryNamespace();
+  createUi.initial = templateFor(currentKind()?.resource ?? null, namespace);
+  createUi.namespace = namespace;
   createUi.open = true;
 }
 

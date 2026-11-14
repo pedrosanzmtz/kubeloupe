@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
-import { openApp, openKind, row } from "./helpers";
+import { openApp, openKind, row, toggleNamespaces } from "./helpers";
 
 function dialog(page: Page): Locator {
   return page.getByRole("dialog", { name: "Create resources" });
@@ -29,7 +29,7 @@ const results = (page: Page) => dialog(page).getByTestId("create-result");
 test("+ Create starts from a template for the kind, validates, creates, and opens the result", async ({ page }) => {
   const fake = await openApp(page);
   await openKind(page, "Config Maps");
-  await page.getByRole("combobox", { name: "Namespace" }).selectOption("demo");
+  await toggleNamespaces(page, "demo");
   const editor = await openCreate(page);
   await expect(editor).toContainText("kind: ConfigMap");
   await expect(editor).toContainText("namespace: demo");

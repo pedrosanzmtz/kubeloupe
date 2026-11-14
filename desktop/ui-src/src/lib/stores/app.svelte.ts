@@ -1,6 +1,7 @@
 import { commands } from "../bindings";
 import type { ContextInfo, NamespaceInfo, ResourceKind } from "../bindings";
-import { closeDetail, openDetail } from "./detail.svelte";
+import { joinNames, normalizeNamespaces, sameNamespaces } from "../namespaces";
+import { closeDetail, detail, openDetail } from "./detail.svelte";
 import { closeAllDockTabs } from "./dock.svelte";
 import { whenDiscarded } from "./unsaved.svelte";
 
@@ -16,7 +17,11 @@ export interface Status {
 /** Shell state shared by the header, sidebar, banner and views. */
 export const app = $state({
   view: "overview" as View,
-  namespace: "",
+  /**
+   * The namespaces the views show, in the order picked (at most
+   * `MAX_NAMESPACES`); empty means all namespaces. Replaced, never mutated.
+   */
+  selectedNamespaces: [] as string[],
   search: "",
   contexts: [] as ContextInfo[],
   namespaces: [] as NamespaceInfo[],
@@ -39,8 +44,8 @@ class Kinds {
   all = $state.raw<ResourceKind[]>([]);
   /** Ids of kinds a SelfSubjectAccessReview denied in `deniedScope`. */
   denied = $state.raw(new Set<string>());
-  /** The namespace `denied` was checked in (`""` = all namespaces). */
-  deniedScope = $state("");
+  /** The namespaces `denied` was checked in (empty = all namespaces). */
+  deniedScope = $state.raw<string[]>([]);
   /** Discovery finished (successfully or not). */
   loaded = $state(false);
 }
@@ -78,21 +83,23 @@ export async function loadKinds() {
 }
 
 /**
- * RBAC: grey out what the user cannot list in the current namespace scope.
- * Best effort; re-run whenever the namespace changes.
+ * RBAC: grey out what the user cannot list in the current namespace scope:
+ * with several namespaces, what is denied in all of them. Best effort;
+ * re-run whenever the selection changes.
  */
 export async function checkAccess() {
   const found = kinds.all;
-  const scope = app.namespace;
+  const scope = [...app.selectedNamespaces];
   if (found.length === 0) return;
   try {
-    const access = await commands.cmdCheckAccess(
-      found.map((k) => k.resource),
-      scope || null,
+    const resources = found.map((k) => k.resource);
+    const answers = await Promise.all(
+      (scope.length ? scope : [null]).map((ns) => commands.cmdCheckAccess(resources, ns)),
     );
-    // Ignore the answer if discovery or the namespace changed meanwhile.
-    if (kinds.all === found && app.namespace === scope) {
-      kinds.denied = new Set(access.filter((a) => !a.allowed).map((a) => a.id));
+    // Ignore the answer if discovery or the namespaces changed meanwhile.
+    if (kinds.all === found && sameNamespaces(app.selectedNamespaces, scope)) {
+      const deniedIn = answers.map((access) => new Set(access.filter((a) => !a.allowed).map((a) => a.id)));
+      kinds.denied = new Set(found.map((k) => k.id).filter((id) => deniedIn.every((d) => d.has(id))));
       kinds.deniedScope = scope;
     }
   } catch {
@@ -103,7 +110,9 @@ export async function checkAccess() {
 /** Why `kind` is greyed out, for its tooltip. */
 export function deniedReason(kind: ResourceKind): string {
   if (!kind.resource.namespaced) return `You are not allowed to list ${kind.label}`;
-  if (kinds.deniedScope) return `${kind.label}: not allowed in namespace ${kinds.deniedScope}`;
+  const scope = kinds.deniedScope;
+  if (scope.length === 1) return `${kind.label}: not allowed in namespace ${scope[0]}`;
+  if (scope.length > 1) return `${kind.label}: not allowed in namespaces ${joinNames(scope)}`;
   return `${kind.label}: not allowed across all namespaces — pick a namespace`;
 }
 
@@ -113,7 +122,7 @@ export function deniedReason(kind: ResourceKind): string {
  * namespace control.
  */
 export function canOpenDenied(kind: ResourceKind): boolean {
-  return kind.resource.namespaced && !kinds.deniedScope;
+  return kind.resource.namespaced && kinds.deniedScope.length === 0;
 }
 
 /** Open an object in its own kind's view (owner links, related objects). */
@@ -193,7 +202,7 @@ export async function initScope() {
   } catch {
     // Unreachable cluster: stay on all namespaces; the views report it.
   }
-  app.namespace = ns ?? "";
+  app.selectedNamespaces = ns ? [ns] : [];
   if (ns && app.namespacesForbidden && !app.knownNamespaces.includes(ns)) {
     app.knownNamespaces = [...app.knownNamespaces, ns].sort();
   }
@@ -224,7 +233,7 @@ export async function switchContext(name: string) {
   // The backend has stopped every stream and session of the old context.
   closeAllDockTabs();
   closeDetail();
-  app.namespace = "";
+  app.selectedNamespaces = [];
   app.view = "overview";
   await loadContexts();
   await loadNamespaces();
@@ -232,9 +241,29 @@ export async function switchContext(name: string) {
   refresh();
 }
 
+/**
+ * Show `namespaces` (empty: all namespaces). Typed namespaces are offered
+ * again when namespaces cannot be listed; the open detail closes when its
+ * object's namespace is no longer shown.
+ */
+export function setNamespaces(namespaces: readonly string[]) {
+  const next = normalizeNamespaces(namespaces);
+  if (sameNamespaces(next, app.selectedNamespaces)) return;
+  if (app.namespacesForbidden) next.forEach(rememberNamespace);
+  const open = detail.target?.namespace;
+  if (open && next.length > 0 && !next.includes(open)) closeDetail();
+  app.selectedNamespaces = next;
+}
+
+/** Show just `namespace` (`""`: all namespaces). */
 export function switchNamespace(namespace: string) {
-  closeDetail();
-  namespace = namespace.trim();
-  if (app.namespacesForbidden) rememberNamespace(namespace);
-  app.namespace = namespace;
+  setNamespaces(namespace.trim() ? [namespace] : []);
+}
+
+/**
+ * The one namespace for what takes a single one (the overview's fallback
+ * scope, the create dialog's default): the first selected, `""` for all.
+ */
+export function primaryNamespace(): string {
+  return app.selectedNamespaces[0] ?? "";
 }
