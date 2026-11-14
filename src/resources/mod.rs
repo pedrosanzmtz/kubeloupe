@@ -15,6 +15,8 @@
 //! - `detail`: the detail panel for any kind
 //! - `pod_detail`: the pod section of the detail panel (containers, probes, ...)
 //! - `detail_watch`: live updates of one object's detail
+//! - `related`: related objects and a per-kind summary (`related_local`,
+//!   `related_summary` hold the pure per-kind parts)
 //! - `table`: `kubectl get`-style table output for the CLI
 
 mod apply;
@@ -26,6 +28,9 @@ mod jsonpath;
 mod manifests;
 mod ops;
 mod pod_detail;
+mod related;
+mod related_local;
+mod related_summary;
 mod table;
 
 pub use apply::{apply_manifests, cli_apply, ApplyResult, ApplyStatus, ManifestOptions};
@@ -42,6 +47,7 @@ pub use pod_detail::{
     env_refs, pod_extras, probe_summary, state_info, ContainerDetail, ContainerKind, EnvInfo,
     MountInfo, PodExtras, PortInfo, ProbeInfo, StateInfo,
 };
+pub use related::{get_related, related_objects, Fact, Related, RelatedGroup, RelatedItem};
 pub use table::{align_columns, render_table, table_cells, table_header};
 
 use columns::Source;

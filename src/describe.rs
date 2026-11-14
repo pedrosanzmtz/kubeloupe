@@ -3,7 +3,8 @@
 
 use crate::get::{object_namespace, resolve_kind_named};
 use crate::resources::{
-    self, align_columns, ContainerDetail, ContainerKind, PodExtras, ResourceDetail, StateInfo,
+    self, align_columns, ContainerDetail, ContainerKind, PodExtras, Related, ResourceDetail,
+    StateInfo,
 };
 use anyhow::Result;
 use kube::Client;
@@ -23,13 +24,23 @@ pub async fn print_describe(
     let kind = resolve_kind_named(client, kind).await?;
     let ns = object_namespace(client, &kind.resource, namespace);
     let detail = resources::get_resource_detail(client, &kind.resource, &ns, name).await?;
-    print!("{}", render_describe(&detail));
+    // Best effort: the object itself was readable, its relations may not be.
+    let related = resources::get_related(client, &kind.resource, &ns, name)
+        .await
+        .unwrap_or_default();
+    print!("{}", render_describe_with(&detail, &related));
     Ok(())
 }
 
 /// The describe text: metadata, owners, labels and annotations, conditions,
 /// Secret keys and events, one section after the other.
 pub fn render_describe(d: &ResourceDetail) -> String {
+    render_describe_with(d, &Related::default())
+}
+
+/// [`render_describe`] with the per-kind summary and related objects
+/// ([`resources::related_objects`]) after the metadata.
+pub fn render_describe_with(d: &ResourceDetail, related: &Related) -> String {
     let mut out = String::new();
     field(&mut out, "Name", &d.name);
     if !d.namespace.is_empty() {
@@ -60,8 +71,7 @@ pub fn render_describe(d: &ResourceDetail) -> String {
     if d.kind == "Pod" {
         pod_section(&mut out, &d.pod);
     }
-    // Related objects (#35): add a "Related:" section here (selected pods,
-    // services, mounted config) once `ResourceDetail` carries them.
+    related_section(&mut out, related);
     if !d.conditions.is_empty() {
         let mut table = vec![row(&["Type", "Status", "Reason", "Age", "Message"])];
         table.extend(d.conditions.iter().map(|c| {
@@ -101,6 +111,19 @@ pub fn render_describe(d: &ResourceDetail) -> String {
         section(&mut out, "Events", &table);
     }
     out
+}
+
+/// The summary line, the facts as fields, then one table per group.
+fn related_section(out: &mut String, r: &Related) {
+    if !r.summary.is_empty() {
+        field(out, "Summary", &r.summary.join(" · "));
+    }
+    for f in &r.facts {
+        field(out, &f.label, &f.value);
+    }
+    for g in &r.groups {
+        out.push_str(&g.to_text());
+    }
 }
 
 /// Pod status, placement and one block per container (env names only: the
@@ -384,6 +407,40 @@ mod tests {
                 ..PodExtras::default()
             },
         }
+    }
+
+    #[test]
+    fn describe_prints_related_objects() {
+        let related = Related {
+            summary: vec!["2/2 ready".into(), "revision 4".into()],
+            facts: vec![resources::Fact {
+                label: "Rollout".into(),
+                value: "complete".into(),
+            }],
+            groups: vec![resources::RelatedGroup {
+                title: "Pods".into(),
+                api_version: "v1".into(),
+                kind: "Pod".into(),
+                columns: vec!["Name".into(), "Status".into()],
+                items: vec![resources::RelatedItem {
+                    namespace: "default".into(),
+                    name: "web-1".into(),
+                    cells: vec!["web-1".into(), "Running".into()],
+                }],
+                ..Default::default()
+            }],
+        };
+        let out = render_describe_with(&detail(), &related);
+        assert!(
+            out.contains("Summary:        2/2 ready · revision 4\nRollout:        complete\n"),
+            "{out}"
+        );
+        assert!(
+            out.contains("Pods:\n  Name   Status\n  web-1  Running\n"),
+            "{out}"
+        );
+        // Without related objects nothing is added.
+        assert!(!render_describe(&detail()).contains("Summary:"));
     }
 
     #[test]

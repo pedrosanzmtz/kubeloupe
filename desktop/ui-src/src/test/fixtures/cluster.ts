@@ -11,12 +11,14 @@ import type {
   Overview_Serialize,
   ContainerDetail,
   PodExtras,
+  Related,
   ResourceDetail,
   ResourceKind,
   ResourceRow,
   StateInfo,
 } from "../../lib/bindings";
 import { DISCOVERED } from "./discover";
+import { relatedFixtures } from "./related";
 
 export interface FakeCluster {
   contexts: ContextInfo_Serialize[];
@@ -48,6 +50,8 @@ export interface FakeCluster {
   resourceVersions: Record<string, number>;
   /** `cmd_bulk_delete` fails these row keys with the given reason. */
   bulkErrors: Record<string, string>;
+  /** What `cmd_get_related` returns, by `kindId|rowKey` (default: nothing related). */
+  related: Record<string, Related>;
   /** `cmd_apply_manifests` rejects objects with these names (dry run included), with the given reason. */
   applyErrors: Record<string, string>;
   overview: Overview_Serialize;
@@ -227,6 +231,7 @@ export function defaultCluster(): FakeCluster {
     nextTakeovers: [],
     resourceVersions: {},
     bulkErrors: {},
+    related: relatedFixtures(),
     applyErrors: {},
     overview: {
       namespaces: 3,

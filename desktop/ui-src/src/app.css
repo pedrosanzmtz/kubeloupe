@@ -97,6 +97,7 @@ th {
 .phase-Active,
 .phase-Bound,
 .phase-Succeeded,
+.phase-Complete,
 .phase-Normal {
   color: var(--green);
 }
