@@ -6,10 +6,12 @@
 //! into at most one [`Batch`] per interval, which is what a UI wants instead
 //! of one event per object.
 
+use crate::resources::{make_row, ResourceKind, ResourceRow};
 use crate::{namespace_info, node_info, pod_info, NamespaceInfo, NodeInfo, PodInfo};
 use futures::stream::{self, BoxStream};
 use futures::{Stream, StreamExt};
 use k8s_openapi::api::core::v1::{Namespace, Node, Pod};
+use kube::api::DynamicObject;
 use kube::runtime::reflector::{self, Store};
 use kube::runtime::watcher::{self, Event};
 use kube::runtime::WatchStreamExt;
@@ -18,6 +20,8 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
+use std::hash::Hash;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Default time between batches.
@@ -57,6 +61,17 @@ impl Keyed for NodeInfo {
     }
     fn same(&self, o: &Self) -> bool {
         (&self.name, &self.ready, &self.version) == (&o.name, &o.ready, &o.version)
+    }
+}
+
+impl Keyed for ResourceRow {
+    fn key(&self) -> String {
+        self.key.clone()
+    }
+    /// Cells hold everything the backend computes; the age column's cell is
+    /// empty (the UI derives it from `created`), so age ticks never differ.
+    fn same(&self, o: &Self) -> bool {
+        (&self.name, &self.namespace, &self.cells) == (&o.name, &o.namespace, &o.cells)
     }
 }
 
@@ -224,7 +239,7 @@ impl<T> Tracker<T> {
     fn step<K>(
         &mut self,
         event: Result<Event<K>, watcher::Error>,
-        convert: fn(&K) -> T,
+        convert: &impl Fn(&K) -> T,
     ) -> Vec<Update<T>> {
         let mut out = Vec::new();
         match event {
@@ -274,12 +289,22 @@ impl<T> Tracker<T> {
 /// Watch `api`, keeping a reflector [`Store`] of the full objects and
 /// yielding summaries (via `convert`) as [`Update`]s. The stream never ends
 /// on its own: failures are retried with backoff. Drop it to stop.
-pub fn watch<K, T>(api: Api<K>, convert: fn(&K) -> T) -> (Store<K>, BoxStream<'static, Update<T>>)
+///
+/// `dyntype` is the kind's dynamic type (`()` for typed resources, an
+/// `ApiResource` for `DynamicObject`), so one watcher serves both the typed
+/// pod/node/namespace watches and any discovered kind.
+pub fn watch_with<K, T>(
+    api: Api<K>,
+    dyntype: K::DynamicType,
+    convert: impl Fn(&K) -> T + Send + 'static,
+) -> (Store<K>, BoxStream<'static, Update<T>>)
 where
-    K: Resource<DynamicType = ()> + Clone + DeserializeOwned + Debug + Send + Sync + 'static,
+    K: Resource + Clone + DeserializeOwned + Debug + Send + Sync + 'static,
+    K::DynamicType: Eq + Hash + Clone + Send + Sync + Unpin,
     T: Send + 'static,
 {
-    let (store, writer) = reflector::store();
+    let writer = reflector::store::Writer::new(dyntype);
+    let store = writer.as_reader();
     let events = reflector::reflector(
         writer,
         watcher::watcher(api, watcher::Config::default()).default_backoff(),
@@ -291,13 +316,39 @@ where
     };
     let updates = events
         .scan(tracker, move |t, event| {
-            futures::future::ready(Some(t.step(event, convert)))
+            futures::future::ready(Some(t.step(event, &convert)))
         })
         .flat_map(stream::iter);
     let first = stream::once(futures::future::ready(Update::State(
         WatchState::Connecting,
     )));
     (store, first.chain(updates).boxed())
+}
+
+/// [`watch_with`] for a typed resource.
+pub fn watch<K, T>(api: Api<K>, convert: fn(&K) -> T) -> (Store<K>, BoxStream<'static, Update<T>>)
+where
+    K: Resource<DynamicType = ()> + Clone + DeserializeOwned + Debug + Send + Sync + 'static,
+    T: Send + 'static,
+{
+    watch_with(api, (), convert)
+}
+
+/// Watch any discovered kind, optionally in one namespace, yielding table
+/// rows built from the kind's column definitions.
+pub fn watch_resource(
+    client: &Client,
+    kind: &ResourceKind,
+    namespace: Option<&str>,
+) -> (
+    Store<DynamicObject>,
+    BoxStream<'static, Update<ResourceRow>>,
+) {
+    let api = crate::resources::dyn_api(client, &kind.resource, namespace);
+    let columns = Arc::new(kind.columns.clone());
+    watch_with(api, kind.resource.api_resource(), move |o| {
+        make_row(&columns, o)
+    })
 }
 
 pub fn watch_pods(
@@ -440,11 +491,11 @@ mod tests {
             failing: false,
         };
         let conv = |s: &String| s.clone();
-        assert!(t.step(Ok(Event::Init), conv).is_empty());
+        assert!(t.step(Ok(Event::Init), &conv).is_empty());
         assert!(t
-            .step(Ok(Event::InitApply("a".to_string())), conv)
+            .step(Ok(Event::InitApply("a".to_string())), &conv)
             .is_empty());
-        let out = t.step(Ok(Event::InitDone), conv);
+        let out = t.step(Ok(Event::InitDone), &conv);
         assert_eq!(
             out,
             vec![
@@ -453,9 +504,9 @@ mod tests {
             ]
         );
         let err = || Err(watcher::Error::NoResourceVersion);
-        assert_eq!(t.step(err(), conv).len(), 1);
-        assert!(t.step(err(), conv).is_empty());
-        let out = t.step(Ok(Event::Apply("b".to_string())), conv);
+        assert_eq!(t.step(err(), &conv).len(), 1);
+        assert!(t.step(err(), &conv).is_empty());
+        let out = t.step(Ok(Event::Apply("b".to_string())), &conv);
         assert_eq!(out.last(), Some(&Update::State(WatchState::Live)));
     }
 }

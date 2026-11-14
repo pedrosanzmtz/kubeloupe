@@ -1,8 +1,8 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use kubeloupe::{
-    client, exec_in_pod, list_namespaces, list_nodes, list_pods, print_pod_logs, print_pod_yaml,
-    print_top_nodes, print_top_pods, run_port_forward, watch_and_print, LogOptions,
+    client, exec_in_pod, list_namespaces, list_nodes, list_pods, print_get, print_pod_logs,
+    print_pod_yaml, print_top_nodes, print_top_pods, run_port_forward, watch_and_print, LogOptions,
 };
 
 #[derive(Parser)]
@@ -22,12 +22,20 @@ enum Commands {
     },
     /// List namespaces
     Namespaces,
-    /// Stream live changes to pods, nodes or namespaces (until Ctrl-C)
+    /// List any resource type, including CRDs (like kubectl get)
+    Get {
+        /// Resource type: plural, kind or short name (deploy, svc, widgets.example.com)
+        kind: String,
+        /// Only list this namespace (default: all namespaces)
+        #[arg(short, long)]
+        namespace: Option<String>,
+    },
+    /// Stream live changes to any resource type (until Ctrl-C)
     Watch {
-        /// What to watch: pods, nodes or namespaces
+        /// What to watch: pods, nodes, deployments, a CRD, ...
         #[arg(default_value = "pods")]
         resource: String,
-        /// Only watch pods in this namespace
+        /// Only watch this namespace
         #[arg(short, long)]
         namespace: Option<String>,
     },
@@ -104,6 +112,9 @@ async fn main() -> Result<()> {
     let client = client().await?;
     match cli.command {
         Commands::Pods { namespace } => list_pods(&client, namespace.as_deref()).await?,
+        Commands::Get { kind, namespace } => {
+            print_get(&client, &kind, namespace.as_deref()).await?
+        }
         Commands::Watch {
             resource,
             namespace,
