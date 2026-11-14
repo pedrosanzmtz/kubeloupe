@@ -1,5 +1,6 @@
 //! Contexts, namespaces, metrics, discovery and access checks.
 
+use crate::commands::usage;
 use crate::state::{
     client, selected_context, stop_all_exec, stop_all_forwards, stop_all_local_shells,
     stop_all_watches, AppState,
@@ -7,10 +8,11 @@ use crate::state::{
 use kubeloupe::resources::{self, AccessResult, ResourceKind, ResourceRef};
 use kubeloupe::{
     default_namespace, get_node_metrics, get_pod_metrics, list_contexts,
-    list_namespaces_if_allowed, ContextInfo, NamespaceInfo, NodeUsage, PodUsage,
+    list_namespaces_if_allowed, ContextInfo, NamespaceInfo, NodeUsage, PodUsage, Spark,
 };
 use serde::{Deserialize, Serialize};
 use specta::Type;
+use std::collections::HashMap;
 use tauri::State;
 
 #[tauri::command]
@@ -43,6 +45,11 @@ pub(crate) struct MetricsSnapshot {
     available: bool,
     pods: Vec<PodUsage>,
     nodes: Vec<NodeUsage>,
+    /// Sparklines of the pods or nodes above, keyed like the table rows
+    /// (`namespace/name`, or the node name).
+    sparks: HashMap<String, Spark>,
+    /// Epoch ms of their oldest recorded sample (0 = none yet).
+    since: u64,
 }
 
 /// Which metrics a view shows.
@@ -55,7 +62,7 @@ pub(crate) enum MetricsKind {
 
 /// Usage for what is on screen: pod metrics in `namespace` (`null` = all
 /// namespaces), or node metrics (`namespace` is ignored). The other list
-/// is empty.
+/// is empty. Each call also records the usage history (#47).
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn cmd_get_metrics(
@@ -63,6 +70,7 @@ pub(crate) async fn cmd_get_metrics(
     namespace: Option<String>,
     what: MetricsKind,
 ) -> Result<MetricsSnapshot, String> {
+    let ctx = selected_context(&state);
     let client = client(&state).await?;
     let (pods, nodes) = match what {
         MetricsKind::Pods => (get_pod_metrics(&client, namespace.as_deref()).await, None),
@@ -71,10 +79,14 @@ pub(crate) async fn cmd_get_metrics(
     let pods = pods.map_err(|e| e.to_string())?;
     let nodes = nodes.transpose().map_err(|e| e.to_string())?.flatten();
     let available = pods.is_some() || nodes.is_some();
+    let (pods, nodes) = (pods.unwrap_or_default(), nodes.unwrap_or_default());
+    let (sparks, since) = usage::record(&state, &ctx, &pods, &nodes);
     Ok(MetricsSnapshot {
         available,
-        pods: pods.unwrap_or_default(),
-        nodes: nodes.unwrap_or_default(),
+        pods,
+        nodes,
+        sparks,
+        since,
     })
 }
 
@@ -129,6 +141,7 @@ pub(crate) async fn cmd_set_context(
     stop_all_forwards(&state);
     stop_all_watches(&state);
     state.kinds.lock().unwrap().clear();
+    state.usage.lock().unwrap().clear();
     *state.context.lock().unwrap() = name;
     *state.client.lock().await = None;
     Ok(())

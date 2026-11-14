@@ -101,6 +101,16 @@ pub struct PodUsage {
     pub name: String,
     pub cpu_millicores: u64,
     pub memory_bytes: u64,
+    /// Per-container usage; the pod's numbers are their sum.
+    pub containers: Vec<ContainerUsage>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+pub struct ContainerUsage {
+    pub name: String,
+    pub cpu_millicores: u64,
+    pub memory_bytes: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -140,35 +150,114 @@ pub async fn get_pod_metrics(
         Err(e) if is_not_found(&e) => return Ok(None),
         Err(e) => return Err(e.into()),
     };
-    let mut usages = Vec::new();
-    for item in list.items {
-        // DynamicObject splits metadata out of `data`, so the name and
-        // namespace live on the item itself, not in data["metadata"].
-        let name = item.metadata.name.unwrap_or_default();
-        let namespace = item.metadata.namespace.unwrap_or_default();
-        let data = &item.data;
-        let mut cpu = 0u64;
-        let mut memory = 0u64;
-        if let Some(containers) = data["containers"].as_array() {
-            for c in containers {
-                cpu += c["usage"]["cpu"]
-                    .as_str()
-                    .and_then(parse_cpu_quantity)
-                    .unwrap_or(0);
-                memory += c["usage"]["memory"]
-                    .as_str()
-                    .and_then(parse_memory_quantity)
-                    .unwrap_or(0);
-            }
-        }
-        usages.push(PodUsage {
-            namespace,
-            name,
-            cpu_millicores: cpu,
-            memory_bytes: memory,
-        });
+    Ok(Some(list.items.into_iter().map(pod_usage).collect()))
+}
+
+/// One PodMetrics object as usage: per container, and summed.
+fn pod_usage(item: DynamicObject) -> PodUsage {
+    // DynamicObject splits metadata out of `data`, so the name and
+    // namespace live on the item itself, not in data["metadata"].
+    let name = item.metadata.name.unwrap_or_default();
+    let namespace = item.metadata.namespace.unwrap_or_default();
+    let containers: Vec<ContainerUsage> = item.data["containers"]
+        .as_array()
+        .map(|cs| {
+            cs.iter()
+                .map(|c| ContainerUsage {
+                    name: c["name"].as_str().unwrap_or_default().to_string(),
+                    cpu_millicores: c["usage"]["cpu"]
+                        .as_str()
+                        .and_then(parse_cpu_quantity)
+                        .unwrap_or(0),
+                    memory_bytes: c["usage"]["memory"]
+                        .as_str()
+                        .and_then(parse_memory_quantity)
+                        .unwrap_or(0),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    PodUsage {
+        namespace,
+        name,
+        cpu_millicores: containers.iter().map(|c| c.cpu_millicores).sum(),
+        memory_bytes: containers.iter().map(|c| c.memory_bytes).sum(),
+        containers,
     }
-    Ok(Some(usages))
+}
+
+/// Usage of one pod. `Ok(None)` = the metrics API is unavailable or has no
+/// sample for it yet (a new pod).
+pub async fn get_one_pod_metrics(
+    client: &Client,
+    namespace: &str,
+    name: &str,
+) -> Result<Option<PodUsage>> {
+    let api: Api<DynamicObject> = Api::namespaced_with(
+        client.clone(),
+        namespace,
+        &metrics_resource("PodMetrics", "pods"),
+    );
+    match api.get_opt(name).await {
+        Ok(item) => Ok(item.map(pod_usage)),
+        Err(e) if is_not_found(&e) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Usage of one node, with its capacity. `Ok(None)` = the metrics API is
+/// unavailable or has no sample for it.
+pub async fn get_one_node_metrics(client: &Client, name: &str) -> Result<Option<NodeUsage>> {
+    let api: Api<DynamicObject> =
+        Api::all_with(client.clone(), &metrics_resource("NodeMetrics", "nodes"));
+    let item = match api.get_opt(name).await {
+        Ok(Some(item)) => item,
+        Ok(None) => return Ok(None),
+        Err(e) if is_not_found(&e) => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    let (_, cpu, memory) = node_usage_of(item);
+    let (cpu_cap, mem_cap) = match Api::<Node>::all(client.clone()).get_opt(name).await {
+        Ok(Some(node)) => node_capacity(&node),
+        _ => (0, 0),
+    };
+    Ok(Some(NodeUsage {
+        name: name.to_string(),
+        cpu_millicores: cpu,
+        cpu_capacity_millicores: cpu_cap,
+        memory_bytes: memory,
+        memory_capacity_bytes: mem_cap,
+    }))
+}
+
+/// A NodeMetrics object as (name, cpu millicores, memory bytes).
+fn node_usage_of(item: DynamicObject) -> (String, u64, u64) {
+    let usage = &item.data["usage"];
+    let cpu = usage["cpu"]
+        .as_str()
+        .and_then(parse_cpu_quantity)
+        .unwrap_or(0);
+    let memory = usage["memory"]
+        .as_str()
+        .and_then(parse_memory_quantity)
+        .unwrap_or(0);
+    (item.metadata.name.unwrap_or_default(), cpu, memory)
+}
+
+/// A node's (cpu millicores, memory bytes) capacity.
+fn node_capacity(node: &Node) -> (u64, u64) {
+    let Some(cap) = node.status.as_ref().and_then(|s| s.capacity.as_ref()) else {
+        return (0, 0);
+    };
+    let cpu = cap
+        .get("cpu")
+        .and_then(|q| parse_cpu_quantity(&q.0))
+        .unwrap_or(0);
+    let memory = cap
+        .get("memory")
+        .and_then(|q| parse_memory_quantity(&q.0))
+        .unwrap_or(0);
+    (cpu, memory)
 }
 
 /// Each node's (name, cpu millicores, memory bytes) from NodeMetrics only.
@@ -181,22 +270,7 @@ async fn list_node_usage(client: &Client) -> Result<Option<Vec<(String, u64, u64
         Err(e) if is_not_found(&e) => return Ok(None),
         Err(e) => return Err(e.into()),
     };
-    let usage = list
-        .items
-        .into_iter()
-        .map(|item| {
-            let usage = &item.data["usage"];
-            let cpu = usage["cpu"]
-                .as_str()
-                .and_then(parse_cpu_quantity)
-                .unwrap_or(0);
-            let memory = usage["memory"]
-                .as_str()
-                .and_then(parse_memory_quantity)
-                .unwrap_or(0);
-            (item.metadata.name.unwrap_or_default(), cpu, memory)
-        })
-        .collect();
+    let usage = list.items.into_iter().map(node_usage_of).collect();
     Ok(Some(usage))
 }
 
@@ -220,19 +294,8 @@ pub async fn get_node_metrics(client: &Client) -> Result<Option<Vec<NodeUsage>>>
     let mut capacities: BTreeMap<String, (u64, u64)> = BTreeMap::new();
     if let Ok(node_list) = nodes.list(&ListParams::default()).await {
         for node in node_list.items {
-            let name = node.metadata.name.unwrap_or_default();
-            let (mut cpu_cap, mut mem_cap) = (0u64, 0u64);
-            if let Some(cap) = node.status.and_then(|s| s.capacity) {
-                cpu_cap = cap
-                    .get("cpu")
-                    .map(|q| parse_cpu_quantity(&q.0).unwrap_or(0))
-                    .unwrap_or(0);
-                mem_cap = cap
-                    .get("memory")
-                    .map(|q| parse_memory_quantity(&q.0).unwrap_or(0))
-                    .unwrap_or(0);
-            }
-            capacities.insert(name, (cpu_cap, mem_cap));
+            let caps = node_capacity(&node);
+            capacities.insert(node.metadata.name.unwrap_or_default(), caps);
         }
     }
     let usages = usage
@@ -275,6 +338,27 @@ mod tests {
         assert_eq!(parse_memory_quantity("123456"), Some(123456));
         assert_eq!(parse_memory_quantity("1.5Gi"), Some(1610612736));
         assert_eq!(parse_memory_quantity("bogus"), None);
+    }
+
+    #[test]
+    fn pod_metrics_keep_their_containers() {
+        let item: DynamicObject = serde_json::from_value(serde_json::json!({
+            "apiVersion": "metrics.k8s.io/v1beta1",
+            "kind": "PodMetrics",
+            "metadata": { "name": "web", "namespace": "demo" },
+            "containers": [
+                { "name": "app", "usage": { "cpu": "120m", "memory": "64Mi" } },
+                { "name": "proxy", "usage": { "cpu": "3000000n", "memory": "1Mi" } }
+            ]
+        }))
+        .unwrap();
+        let u = pod_usage(item);
+        assert_eq!((u.namespace.as_str(), u.name.as_str()), ("demo", "web"));
+        assert_eq!(u.cpu_millicores, 123);
+        assert_eq!(u.memory_bytes, 65 * 1024 * 1024);
+        assert_eq!(u.containers.len(), 2);
+        assert_eq!(u.containers[1].name, "proxy");
+        assert_eq!(u.containers[1].cpu_millicores, 3);
     }
 
     #[test]

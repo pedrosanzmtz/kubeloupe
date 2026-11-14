@@ -103,9 +103,10 @@
         name: p.name,
         cpu_millicores: Math.floor(Math.random() * 2000),
         memory_bytes: Math.floor(Math.random() * 2 ** 30),
+        containers: [],
       });
     }
-    metrics = { pods, nodes: new Map() };
+    metrics = { pods, nodes: new Map(), sparks: new Map(), since: 0 };
     now = Date.now();
     say(`metrics merge (${pods.size} pods) built in ${(performance.now() - t0).toFixed(1)} ms`);
   }

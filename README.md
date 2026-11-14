@@ -22,7 +22,11 @@ Svelte) and a CLI, both built on the same Rust core.
 - **Live tables**: lists are kept up to date by Kubernetes watches, not by
   polling, and stay smooth with thousands of rows. Show one namespace, several
   at once (up to 10, one watch each) or all of them, and filter by text.
-  Pods and Nodes show CPU/memory usage when the metrics API is available.
+  Pods and Nodes show CPU/memory usage when the metrics API is available,
+  with a small trend line of the last 30 minutes. The pod and node detail
+  panels chart CPU and memory (pods per container too) against requests and
+  limits, or allocatable. metrics-server keeps no history, so the trend starts when a
+  view that shows metrics opens.
 - **Overview**: pod counts (crash-looping pods count as errors, not as
   running), problem pods, CPU/memory/pod capacity against requests and usage,
   and the newest warning events, each linking to its object. Kept live by

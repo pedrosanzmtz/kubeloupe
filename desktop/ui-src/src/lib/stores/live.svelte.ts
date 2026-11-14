@@ -231,9 +231,18 @@ export class LiveTable {
     this.metrics = {
       pods: new Map(snaps.flatMap((s) => s.pods.map((p) => [`${p.namespace}/${p.name}`, p] as const))),
       nodes: new Map(snaps.flatMap((s) => s.nodes.map((n) => [n.name, n] as const))),
+      // The backend records each poll into its usage history (#47).
+      sparks: new Map(snaps.flatMap((s) => Object.entries(s.sparks))),
+      since: earliest(snaps.map((s) => s.since)),
     };
     this.now = Date.now();
   }
+}
+
+/** The earliest of some epoch-ms times, ignoring 0 (none); 0 if all are. */
+function earliest(times: number[]): number {
+  const set = times.filter((t) => t > 0);
+  return set.length > 0 ? Math.min(...set) : 0;
 }
 
 export const live = new LiveTable();

@@ -2248,3 +2248,77 @@ async fn related_configmap_is_used_by_the_pod_that_mounts_it() -> Result<()> {
     })
     .await
 }
+
+/// Epoch milliseconds now.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+}
+
+#[tokio::test]
+#[ignore]
+async fn usage_history_accumulates_for_a_demo_pod() -> Result<()> {
+    use kubeloupe::{get_one_node_metrics, get_one_pod_metrics, get_usage_reference};
+    use kubeloupe::{UsageHistory, MIN_SPACING_MS};
+    let client = connect().await?;
+    // The shared demo pod with two containers; only read here.
+    wait_running(&client, "demo", "multi").await?;
+    let mut history = UsageHistory::new();
+    // Poll like the pods table does, a little more than the minimum spacing
+    // apart, until three samples are in.
+    for round in 0..3 {
+        if round > 0 {
+            tokio::time::sleep(Duration::from_millis(MIN_SPACING_MS + 500)).await;
+        }
+        let pods = eventually("demo pod metrics", Duration::from_secs(240), || async {
+            Ok(get_pod_metrics(&client, Some("demo"))
+                .await?
+                .filter(|m| m.iter().any(|p| p.name == "multi")))
+        })
+        .await?;
+        history.record_pods(now_ms(), &pods);
+    }
+    let view = history.view(true, "demo/multi");
+    ensure!(view.samples.len() == 3, "{view:?}");
+    ensure!(view.since == view.samples[0].t);
+    ensure!(view.samples.iter().all(|s| s.memory_bytes > 0), "{view:?}");
+    let names: Vec<&str> = view.containers.iter().map(|c| c.name.as_str()).collect();
+    ensure!(names == ["app", "sidecar"], "{names:?}");
+    ensure!(view.containers.iter().all(|c| c.samples.len() == 3));
+
+    // A detail panel samples one pod itself; too soon after the last poll,
+    // it adds nothing.
+    let one = get_one_pod_metrics(&client, "demo", "multi")
+        .await?
+        .context("no metrics for demo/multi")?;
+    ensure!(one.containers.len() == 2, "{one:?}");
+    let last = view.samples[2].t;
+    history.record_pods(last + 1000, &[one]);
+    ensure!(history.view(true, "demo/multi").samples.len() == 3);
+    ensure!(get_one_pod_metrics(&client, "demo", "no-such-pod")
+        .await?
+        .is_none());
+
+    // Reference lines: CoreDNS sets requests and a memory limit; nodes have
+    // allocatable.
+    let dns = get_pods(&client, Some("kube-system"))
+        .await?
+        .into_iter()
+        .find(|p| p.name.starts_with("coredns-"))
+        .context("no coredns pod")?;
+    let r = get_usage_reference(&client, Some("kube-system"), &dns.name).await?;
+    ensure!(
+        r.cpu_request > 0 && r.memory_request > 0 && r.memory_limit > 0,
+        "{r:?}"
+    );
+    let node = get_nodes(&client).await?.remove(0).name;
+    let r = get_usage_reference(&client, None, &node).await?;
+    ensure!(r.cpu_allocatable > 0 && r.memory_allocatable > 0, "{r:?}");
+    let n = get_one_node_metrics(&client, &node)
+        .await?
+        .context("no node metrics")?;
+    ensure!(n.memory_bytes > 0 && n.cpu_capacity_millicores > 0, "{n:?}");
+    Ok(())
+}

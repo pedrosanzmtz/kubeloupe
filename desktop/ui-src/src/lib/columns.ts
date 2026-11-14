@@ -1,4 +1,4 @@
-import type { ColumnDef, NodeUsage, PodUsage, ResourceKind, ResourceRow } from "./bindings";
+import type { ColumnDef, NodeUsage, PodUsage, ResourceKind, ResourceRow, Spark } from "./bindings";
 import { formatAge, formatCpu, formatMemory } from "./format";
 
 export type Row = ResourceRow;
@@ -7,6 +7,10 @@ export type Row = ResourceRow;
 export interface Metrics {
   pods: Map<string, PodUsage>;
   nodes: Map<string, NodeUsage>;
+  /** Usage history for the sparklines (#47), keyed like `pods` or `nodes`. */
+  sparks: Map<string, Spark>;
+  /** Epoch ms the history of what is shown starts at (0 = none yet). */
+  since: number;
 }
 
 /** Things a cell may depend on besides the row itself. */
@@ -26,9 +30,12 @@ export interface Column {
   sort(row: Row, ctx: Ctx): string | number;
   /** Optional CSS class for the cell. */
   cls?(row: Row): string;
+  /** Values of the cell's sparkline, oldest first (metric columns only). */
+  spark?(row: Row, ctx: Ctx): readonly number[];
 }
 
-export const EMPTY_METRICS: Metrics = { pods: new Map(), nodes: new Map() };
+export const EMPTY_METRICS: Metrics = { pods: new Map(), nodes: new Map(), sparks: new Map(), since: 0 };
+const NO_SPARK: readonly number[] = [];
 
 export function isPod(kind: ResourceKind): boolean {
   return kind.resource.group === "" && kind.resource.kind === "Pod";
@@ -42,13 +49,13 @@ function widthFor(def: ColumnDef): string {
     case "age":
       return "64px";
     case "podCpu":
-      return "80px";
+      return "112px";
     case "podMemory":
-      return "90px";
+      return "122px";
     case "nodeCpu":
-      return "minmax(100px, 1fr)";
+      return "minmax(140px, 1fr)";
     case "nodeMemory":
-      return "minmax(120px, 1fr)";
+      return "minmax(160px, 1fr)";
   }
   if (def.key === "name") return "minmax(160px, 2.2fr)";
   if (def.key === "namespace") return "minmax(120px, 1.2fr)";
@@ -81,6 +88,7 @@ function column(def: ColumnDef, index: number): Column {
           return m ? formatCpu(m.cpu_millicores) : "—";
         },
         sort: (r, c) => c.metrics.pods.get(r.key)?.cpu_millicores ?? -1,
+        spark: (r, c) => c.metrics.sparks.get(r.key)?.cpu ?? NO_SPARK,
       };
     case "podMemory":
       return {
@@ -90,6 +98,7 @@ function column(def: ColumnDef, index: number): Column {
           return m ? formatMemory(m.memory_bytes) : "—";
         },
         sort: (r, c) => c.metrics.pods.get(r.key)?.memory_bytes ?? -1,
+        spark: (r, c) => c.metrics.sparks.get(r.key)?.memory ?? NO_SPARK,
       };
     case "nodeCpu":
       return {
@@ -103,6 +112,7 @@ function column(def: ColumnDef, index: number): Column {
           );
         },
         sort: (r, c) => c.metrics.nodes.get(r.name)?.cpu_millicores ?? -1,
+        spark: (r, c) => c.metrics.sparks.get(r.name)?.cpu ?? NO_SPARK,
       };
     case "nodeMemory":
       return {
@@ -116,6 +126,7 @@ function column(def: ColumnDef, index: number): Column {
           );
         },
         sort: (r, c) => c.metrics.nodes.get(r.name)?.memory_bytes ?? -1,
+        spark: (r, c) => c.metrics.sparks.get(r.name)?.memory ?? NO_SPARK,
       };
     case "number":
       return { ...base, text: cell, sort: (r) => numeric(cell(r)) };

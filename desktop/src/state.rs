@@ -7,6 +7,7 @@ use kube::api::TerminalSize;
 use kube::Client;
 use kubeloupe::client_for_context_with;
 use kubeloupe::resources::ResourceKind;
+use kubeloupe::UsageHistory;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -56,6 +57,8 @@ pub(crate) struct AppState {
     pub(crate) kinds: Mutex<Vec<ResourceKind>>,
     /// Running node drains, by drain id.
     pub(crate) drains: Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>,
+    /// Usage history of the selected context (#47), cleared when it changes.
+    pub(crate) usage: Mutex<UsageHistory>,
 }
 
 pub(crate) fn selected_context(state: &State<'_, AppState>) -> Option<String> {
