@@ -193,14 +193,20 @@ pub enum Commands {
         #[arg(long)]
         reveal: bool,
     },
-    /// Forward a pod port to localhost (until Ctrl-C)
+    /// Forward ports of a pod, Service or workload to localhost (until Ctrl-C).
+    /// A Service or workload forward picks a ready pod for each connection,
+    /// so it keeps working when pods restart.
     #[command(name = "port-forward")]
     PortForward {
-        /// Pod name
-        name: String,
-        /// Pod port to forward
-        port: u16,
-        /// Pod namespace
+        /// A pod name, `pod/<name>`, `svc/<name>`, or `deploy/`, `sts/`, `rs/`,
+        /// `ds/<name>`
+        target: String,
+        /// `<remote>`, `<local>:<remote>` or `:<remote>` (random local port).
+        /// The remote port may be a port name. With only `<remote>` the local
+        /// port is the same if it is free and at least 1024, otherwise random.
+        #[arg(required = true, value_name = "PORT")]
+        ports: Vec<String>,
+        /// Namespace (default: the context's namespace)
         #[arg(short, long)]
         namespace: Option<String>,
     },
@@ -337,6 +343,29 @@ mod tests {
         };
         assert_eq!(file, "-");
         assert!(dry_run);
+    }
+
+    #[test]
+    fn port_forward_forms() {
+        // The old `<pod> <port>` form still parses.
+        let Commands::PortForward { target, ports, .. } =
+            parse(&["port-forward", "web-1", "80"]).command
+        else {
+            panic!("not port-forward");
+        };
+        assert_eq!((target.as_str(), ports), ("web-1", vec!["80".to_string()]));
+        let Commands::PortForward {
+            target,
+            ports,
+            namespace,
+        } = parse(&["port-forward", "svc/api", "8080:80", ":http", "-n", "demo"]).command
+        else {
+            panic!("not port-forward");
+        };
+        assert_eq!(target, "svc/api");
+        assert_eq!(ports, vec!["8080:80", ":http"]);
+        assert_eq!(namespace.as_deref(), Some("demo"));
+        assert!(Cli::try_parse_from(["kubeloupe", "port-forward", "svc/api"]).is_err());
     }
 
     #[test]

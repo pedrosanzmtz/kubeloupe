@@ -79,11 +79,19 @@ export const commands = {
 	cmdExecResize: (session: string, cols: number, rows: number, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_exec_resize", { session, cols, rows }, options),
 	cmdExecClose: (session: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_exec_close", { session }, options),
 	/**
-	 *  Forward a pod port to localhost. Returns the session id and the local
-	 *  port the forward listens on.
+	 *  Start forwarding `remote_port` (a number or a port name) of a pod,
+	 *  Service or workload. `local_port`: none picks the remote port if it is
+	 *  free and at least 1024, else a random one; 0 is random; any other
+	 *  number is used as is or fails if taken. Asking again for a forward that
+	 *  already runs (same target and port, no explicit local port) returns it.
 	 */
-	cmdPortforwardStart: (namespace: string, name: string, port: number, options?: InvokeOptions) => __TAURI_INVOKE<PortForwardInfo>("cmd_portforward_start", { namespace, name, port }, options),
-	cmdPortforwardStop: (session: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_portforward_stop", { session }, options),
+	cmdPortforwardStart: (target: ForwardTarget, remotePort: string, localPort: number | null, options?: InvokeOptions) => __TAURI_INVOKE<ForwardInfo>("cmd_portforward_start", { target, remotePort, localPort }, options),
+	/**  Stop a forward. Stopping one that is already gone is not an error. */
+	cmdPortforwardStop: (id: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_portforward_stop", { id }, options),
+	/**  Every running forward, oldest first. */
+	cmdPortforwardList: (options?: InvokeOptions) => __TAURI_INVOKE<ForwardInfo[]>("cmd_portforward_list", undefined, options),
+	/**  The ports of a Service, for its per-port Forward buttons. */
+	cmdServicePorts: (namespace: string, name: string, options?: InvokeOptions) => __TAURI_INVOKE<ServicePortInfo[]>("cmd_service_ports", { namespace, name }, options),
 	/**  Detail of any object; pods include their `pod` section. */
 	cmdGetResourceDetail: (resource: ResourceRef, namespace: string, name: string, options?: InvokeOptions) => __TAURI_INVOKE<ResourceDetail>("cmd_get_resource_detail", { resource, namespace, name }, options),
 	/**
@@ -190,14 +198,21 @@ export type ActionDef = {
 	input: ActionInput,
 };
 
-export type ActionId = "delete" | "forceDelete" | "scale" | "restart" | "cordon" | "uncordon" | "drain" | "trigger" | "suspend" | "resume";
+export type ActionId = "delete" | "forceDelete" | "scale" | "restart" | "cordon" | "uncordon" | "drain" | "trigger" | "suspend" | "resume" | 
+/**
+ *  Start a port-forward. Long-running, so the UI and the CLI handle it
+ *  themselves ([`crate::PortForward`]); [`run_action`] refuses it.
+ */
+"portForward";
 
 /**  An extra value the action needs before it can run. */
 export type ActionInput = 
 /**  Nothing more is needed. */
 "none" | 
 /**  A non-negative whole number of replicas. */
-"replicas";
+"replicas" | 
+/**  A remote port (number or name) and an optional local port. */
+"port";
 
 /**  What an apply did. */
 export type ApplyOutcome = 
@@ -444,6 +459,47 @@ export type FieldTakeover = {
 	manager: string,
 	/**  Field paths, as the API server reports them (e.g. ".spec.replicas"). */
 	fields: string[],
+};
+
+/**  One running forward, with its live status. */
+export type ForwardInfo = {
+	id: string,
+	target: ForwardTarget,
+	/**  The remote port as asked for: a number or a port name. */
+	remote: string,
+	/**  Its number on the target (the Service port or the pod port). */
+	remote_port: number,
+	local_port: number,
+	/**  `http://127.0.0.1:<local_port>`. */
+	url: string,
+	/**  Epoch milliseconds. */
+	started_at: number,
+	status: ForwardStatus,
+};
+
+/**  The kind of object a forward points at. */
+export type ForwardKind = "pod" | "service" | "deployment" | "statefulSet" | "replicaSet" | "daemonSet";
+
+/**  Live state of a forward. */
+export type ForwardStatus = {
+	/**  The pod the last connection went to (empty before the first one). */
+	pod: string,
+	/**  Connections open right now. */
+	connections: number,
+	/**  Connections served since the start. */
+	total_connections: number,
+	/**
+	 *  What went wrong last, in plain words; empty once a later connection
+	 *  got an answer.
+	 */
+	last_error: string,
+};
+
+/**  The object a forward points at. */
+export type ForwardTarget = {
+	kind: ForwardKind,
+	namespace: string,
+	name: string,
 };
 
 /**  The chart of one revision, for the list's chart columns. */
@@ -785,11 +841,6 @@ export type PodUsage = {
 	memory_bytes: number,
 };
 
-export type PortForwardInfo = {
-	session: string,
-	local_port: number,
-};
-
 export type PortInfo = {
 	name: string,
 	port: number,
@@ -955,6 +1006,16 @@ export type SecretKey = {
 	key: string,
 	/**  Decoded size in bytes. */
 	bytes: number,
+};
+
+/**  One port of a Service, for the UI's per-port Forward buttons. */
+export type ServicePortInfo = {
+	/**  Empty when the port has no name. */
+	name: string,
+	port: number,
+	protocol: string,
+	/**  The `targetPort`: a number or a container port name. */
+	target_port: string,
 };
 
 /**  A container state (current or last). `state` is empty when there is none. */

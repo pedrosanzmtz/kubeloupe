@@ -8,6 +8,7 @@
   import MetaSection from "./MetaSection.svelte";
   import RelatedGroups from "./RelatedGroups.svelte";
   import YamlEditor from "./YamlEditor.svelte";
+  import ServicePorts from "./ServicePorts.svelte";
   import { isWorkloadResource } from "../dock";
   import { closeDetail } from "../stores/detail.svelte";
   import { openDockTab } from "../stores/dock.svelte";
@@ -96,6 +97,9 @@
       {:else}
         {#if hasRelated}<KindSummary {related} />{/if}
         <MetaSection {info} />
+        {#if target.resource.group === "" && target.resource.kind === "Service"}
+          <ServicePorts namespace={target.namespace} name={target.name} disabled={live.deleted} />
+        {/if}
 
         {#if info.secret_keys.length > 0}
           <h3>Data</h3>

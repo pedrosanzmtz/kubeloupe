@@ -2,6 +2,16 @@
   import type { Category, ResourceKind } from "../bindings";
   import { app, canOpenDenied, deniedReason, kinds, setView } from "../stores/app.svelte";
   import { HELM_VIEW } from "../helm";
+  import { PORT_FORWARDS_VIEW } from "../forwards";
+  import { forwards, refreshForwards } from "../stores/forwards.svelte";
+  import { untrack } from "svelte";
+
+  // The count beside Port Forwards: refreshed on start, on Refresh and on a
+  // context switch (which stops every forward).
+  $effect(() => {
+    void app.refreshNonce;
+    untrack(refreshForwards);
+  });
 
   const SECTIONS: { category: Category; title: string }[] = [
     { category: "workloads", title: "Workloads" },
@@ -75,11 +85,21 @@
 
   {#each SECTIONS as section (section.category)}
     {@const list = byCategory.get(section.category) ?? []}
-    {#if list.length > 0}
+    {#if list.length > 0 || (section.category === "network" && forwards.list.length > 0)}
       <h4>{section.title}</h4>
       {#each list as kind (kind.id)}
         {@render item(kind)}
       {/each}
+      {#if section.category === "network"}
+        <!-- Not a cluster kind: the forwards this app runs. -->
+        <button
+          type="button"
+          class:active={app.view === PORT_FORWARDS_VIEW}
+          onclick={() => setView(PORT_FORWARDS_VIEW)}
+        >
+          Port Forwards{#if forwards.list.length > 0}<span class="count" aria-hidden="true">{forwards.list.length}</span>{/if}
+        </button>
+      {/if}
     {/if}
   {/each}
 
@@ -150,6 +170,13 @@
     background: var(--bg-hover);
     color: var(--text);
     font-weight: 600;
+  }
+  .count {
+    margin-left: 6px;
+    padding: 0 6px;
+    border-radius: 8px;
+    background: var(--bg-hover);
+    font-size: 11px;
   }
   button.denied {
     opacity: 0.4;

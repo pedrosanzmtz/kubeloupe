@@ -3,5 +3,12 @@
   "identifier": "default",
   "description": "Capabilities for the kubeloupe desktop app",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "http://127.0.0.1:*" }, { "url": "http://localhost:*" }],
+      "deny": [{ "url": "*@*" }]
+    }
+  ]
 }

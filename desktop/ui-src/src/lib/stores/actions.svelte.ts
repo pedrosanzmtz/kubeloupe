@@ -4,6 +4,8 @@ import { drainLine, needsDialog, sameResource, targetLabel } from "../actions";
 import type { ActionTarget } from "../actions";
 import { kinds } from "./app.svelte";
 import { closeDetail, detail } from "./detail.svelte";
+import { forwardKindOf } from "../forwards";
+import { openForwardDialog } from "./forwards.svelte";
 
 /** Drain gives up waiting on PodDisruptionBudgets after this long. */
 const DRAIN_TIMEOUT_SECS = 300;
@@ -69,6 +71,12 @@ export function kindOfResource(r: ResourceRef): ResourceKind | undefined {
  */
 export function requestAction(kind: ResourceKind, targets: ActionTarget[], action: ActionDef, replicas = 1) {
   if (targets.length === 0) return;
+  // A forward keeps running, so it has its own dialog and store.
+  const fk = action.id === "portForward" ? forwardKindOf(kind.resource) : null;
+  if (fk) {
+    openForwardDialog({ kind: fk, namespace: targets[0].namespace, name: targets[0].name });
+    return;
+  }
   const req: ActionRequest = { kind, targets, action, replicas, typed: "" };
   if (needsDialog(action, targets)) {
     actionUi.request = req;

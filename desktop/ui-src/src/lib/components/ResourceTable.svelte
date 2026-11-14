@@ -344,6 +344,11 @@
   .grid {
     flex: 1;
     min-height: 0;
+    min-width: 0;
+    /* Columns wider than the table are cut off here, like the rows in the
+       scroller. Without the clip the header labels overflow into the detail
+       panel and, being text, paint over its background (#57). */
+    overflow: hidden;
     display: flex;
     flex-direction: column;
     outline: none;
