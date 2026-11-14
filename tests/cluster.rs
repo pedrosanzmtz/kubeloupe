@@ -26,15 +26,16 @@ use kubeloupe::actions::{
 };
 use kubeloupe::resources::{
     self, apply_resource_yaml, apply_resource_yaml_with, delete_resource, get_resource_detail,
-    get_resource_yaml, list_resources, ApplyOptions, ApplyOutcome, Category, ResourceKind,
+    get_resource_yaml, list_resources, ApplyOptions, ApplyOutcome, Category, DetailState,
+    ResourceDetail, ResourceKind,
 };
 use kubeloupe::watch::Update;
 use kubeloupe::watch::WatchState;
 use kubeloupe::{
     apply_pod_yaml, client_for_context, default_namespace, exec_command, get_namespaces, get_nodes,
-    get_overview, get_pod_details, get_pod_logs, get_pod_metrics, get_pod_yaml, get_pods,
-    is_forbidden, list_namespaces_if_allowed, serve_port_forward, stream_pod_logs,
-    stream_workload_logs, LogOptions, WorkloadEvent, WorkloadKind,
+    get_overview, get_pod_logs, get_pod_metrics, get_pod_yaml, get_pods, is_forbidden,
+    list_namespaces_if_allowed, pod_ref, serve_port_forward, stream_pod_logs, stream_workload_logs,
+    LogOptions, WorkloadEvent, WorkloadKind,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -123,6 +124,11 @@ fn sleeper_pod(name: &str) -> Pod {
     .unwrap()
 }
 
+/// A pod's detail (with its `pod` section).
+async fn get_pod_details(client: &Client, ns: &str, name: &str) -> Result<ResourceDetail> {
+    get_resource_detail(client, &pod_ref(), ns, name).await
+}
+
 async fn first_running_demo_pod(client: &Client, prefix: &str) -> Result<String> {
     eventually(
         &format!("a running demo/{prefix}* pod"),
@@ -187,6 +193,7 @@ async fn pod_details_lists_log_containers() -> Result<()> {
     )
     .await?;
     let names: Vec<_> = d
+        .pod
         .log_containers
         .iter()
         .map(|c| (c.name.as_str(), c.init))
@@ -1718,4 +1725,138 @@ async fn admin_sees_everything_unscoped() -> Result<()> {
     ensure!(pods.namespace.is_none() && pods.total > 0);
     ensure!(ov.events.context("events")?.namespace.is_none());
     Ok(())
+}
+
+#[tokio::test]
+#[ignore]
+async fn pending_pod_detail_has_failed_scheduling_event() -> Result<()> {
+    let client = connect().await?;
+    // The scheduler retries `default/hungry` with backoff; its event is
+    // refreshed on every retry.
+    let d = eventually("a FailedScheduling event", TIMEOUT, || async {
+        let d = get_pod_details(&client, "default", "hungry").await?;
+        Ok(d.events
+            .iter()
+            .any(|e| e.reason == "FailedScheduling" && e.type_ == "Warning")
+            .then_some(d))
+    })
+    .await?;
+    let pod = d.pod;
+    ensure!(pod.phase == "Pending", "{pod:?}");
+    ensure!(pod.node.is_empty(), "{pod:?}");
+    ensure!(
+        d.conditions
+            .iter()
+            .any(|c| c.type_ == "PodScheduled" && c.status == "False"),
+        "{:?}",
+        d.conditions
+    );
+    let c = &pod.containers[0];
+    ensure!(
+        c.requests.get("cpu").map(String::as_str) == Some("1k"),
+        "{c:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore]
+async fn crashed_pod_detail_has_last_termination() -> Result<()> {
+    let client = connect().await?;
+    // `demo/crashed` exits 1 every few seconds: right after a restart only
+    // `last_state` has the termination, in between `state` has it.
+    let c = eventually(
+        "a non-zero termination of demo/crashed",
+        TIMEOUT,
+        || async {
+            let d = get_pod_details(&client, "demo", "crashed").await?;
+            let c = d.pod.containers.into_iter().find(|c| c.name == "app");
+            Ok(c.filter(|c| c.last_state.state == "terminated"))
+        },
+    )
+    .await?;
+    ensure!(c.last_state.exit_code != 0, "{c:?}");
+    ensure!(c.last_state.reason == "Error", "{c:?}");
+    ensure!(!c.last_state.since.is_empty(), "{c:?}");
+    ensure!(c.restarts > 0, "{c:?}");
+    ensure!(c.image == "busybox:1.36" && !c.image_id.is_empty(), "{c:?}");
+    ensure!(c.env.is_empty() && c.probes.is_empty(), "{c:?}");
+    Ok(())
+}
+
+/// The next detail-watch state that passes `f`.
+async fn next_detail(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<DetailState>,
+    want: &str,
+    f: fn(&DetailState) -> bool,
+) -> Result<DetailState> {
+    within(want, TIMEOUT, async {
+        while let Some(s) = rx.recv().await {
+            if f(&s) {
+                return Ok(s);
+            }
+        }
+        bail!("watch ended")
+    })
+    .await
+}
+
+#[tokio::test]
+#[ignore]
+async fn detail_watch_sends_updates_and_deleted() -> Result<()> {
+    in_temp_ns("kl-it-dwatch", |client, ns| async move {
+        let pods: Api<Pod> = Api::namespaced(client.clone(), &ns);
+        let mut pod = sleeper_pod("p");
+        pod.spec.as_mut().unwrap().containers[0].env = Some(serde_json::from_value(
+            serde_json::json!([
+                { "name": "LITERAL", "value": "do-not-show-me" },
+                { "name": "FROM_SECRET", "valueFrom": { "secretKeyRef": { "name": "s", "key": "k", "optional": true } } }
+            ]),
+        )?);
+        pods.create(&PostParams::default(), &pod).await?;
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let watch = tokio::spawn(resources::run_detail_watch(
+            client.clone(),
+            pod_ref(),
+            ns.clone(),
+            "p".into(),
+            Duration::from_millis(200),
+            move |s| {
+                let _ = tx.send(s);
+            },
+        ));
+        let first = next_detail(&mut rx, "the first detail", |s| {
+            matches!(s, DetailState::Detail { .. })
+        })
+        .await?;
+        let text = serde_json::to_string(&first)?;
+        ensure!(!text.contains("do-not-show-me"), "{text}");
+        let DetailState::Detail { detail } = first else {
+            unreachable!()
+        };
+        let env = &detail.pod.containers[0].env;
+        ensure!(
+            env.iter()
+                .any(|e| e.name == "FROM_SECRET" && e.source == "secret:s/k"),
+            "{env:?}"
+        );
+
+        pods.patch(
+            "p",
+            &PatchParams::default(),
+            &Patch::Merge(serde_json::json!({ "metadata": { "labels": { "watched": "yes" } } })),
+        )
+        .await?;
+        next_detail(&mut rx, "the label update", |s| {
+            matches!(s, DetailState::Detail { detail } if detail.labels.get("watched").is_some_and(|v| v == "yes"))
+        })
+        .await?;
+
+        pods.delete("p", &DeleteParams::default().grace_period(0)).await?;
+        next_detail(&mut rx, "deleted", |s| matches!(s, DetailState::Deleted)).await?;
+        watch.abort();
+        Ok(())
+    })
+    .await
 }
