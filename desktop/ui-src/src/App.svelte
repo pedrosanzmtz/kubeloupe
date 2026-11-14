@@ -5,6 +5,8 @@
   import ErrorBanner from "./lib/components/ErrorBanner.svelte";
   import ActionDialog from "./lib/components/ActionDialog.svelte";
   import ActionNotice from "./lib/components/ActionNotice.svelte";
+  import NodeShellLeftovers from "./lib/components/NodeShellLeftovers.svelte";
+  import { checkLeftovers } from "./lib/stores/debug.svelte";
   import UnsavedDialog from "./lib/components/UnsavedDialog.svelte";
   import CreateDialog from "./lib/components/CreateDialog.svelte";
   import { createUi } from "./lib/stores/create.svelte";
@@ -44,6 +46,7 @@
       await loadContexts();
       await loadNamespaces();
       await initScope();
+      await checkLeftovers();
     })();
     return () => {
       unlisten.then((un) => un());
@@ -79,6 +82,7 @@
     {/if}
     <ErrorBanner />
     <ActionNotice />
+    <NodeShellLeftovers />
     {#if app.view === "overview"}
       <Overview />
     {:else if app.view === PORT_FORWARDS_VIEW}

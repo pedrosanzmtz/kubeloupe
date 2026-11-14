@@ -146,6 +146,31 @@ export const commands = {
 	 *  stays cordoned.
 	 */
 	cmdCancelDrain: (drainId: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_cancel_drain", { drainId }, options),
+	/**
+	 *  Add an ephemeral debug container to a pod, targeting `target` (empty: the
+	 *  first container), and attach to it, as terminal session `session` (an id
+	 *  the UI picks, `ui-…`, so it can show the progress written into the
+	 *  session while this runs). Returns the session id.
+	 */
+	cmdDebugStart: (session: string, namespace: string, name: string, target: string, image: string, cols: number, rows: number, options?: InvokeOptions) => __TAURI_INVOKE<string>("cmd_debug_start", { session, namespace, name, target, image, cols, rows }, options),
+	/**
+	 *  Open a root shell on `node` through a privileged pod in `namespace`, as
+	 *  terminal session `session` (see [`cmd_debug_start`]). The pod is deleted
+	 *  when the session closes or ends, on a context switch and when the app
+	 *  quits.
+	 */
+	cmdNodeShellStart: (session: string, node: string, namespace: string, cols: number, rows: number, options?: InvokeOptions) => __TAURI_INVOKE<string>("cmd_node_shell_start", { session, node, namespace, cols, rows }, options),
+	/**
+	 *  Node shell pods in the cluster that no session of this window owns:
+	 *  left behind by a crash (or open in another window). Empty when the
+	 *  user may not list pods across namespaces.
+	 */
+	cmdNodeShellLeftovers: (options?: InvokeOptions) => __TAURI_INVOKE<NodeShellPod[]>("cmd_node_shell_leftovers", undefined, options),
+	/**
+	 *  Delete the node shell pods [`cmd_node_shell_leftovers`] lists. Returns
+	 *  how many were deleted; fails with the first error after trying them all.
+	 */
+	cmdNodeShellCleanup: (options?: InvokeOptions) => __TAURI_INVOKE<number>("cmd_node_shell_cleanup", undefined, options),
 };
 
 /** Events */
@@ -192,7 +217,17 @@ export type ActionId = "delete" | "forceDelete" | "scale" | "restart" | "cordon"
  *  Start a port-forward. Long-running, so the UI and the CLI handle it
  *  themselves ([`crate::PortForward`]); [`run_action`] refuses it.
  */
-"portForward";
+"portForward" | 
+/**
+ *  Add an ephemeral debug container and attach to it. Interactive, so
+ *  handled like [`ActionId::PortForward`] ([`crate::debug`]).
+ */
+"debug" | 
+/**
+ *  A root shell on a node through a privileged pod. Interactive
+ *  ([`crate::node_shell`]).
+ */
+"nodeShell";
 
 /**  An extra value the action needs before it can run. */
 export type ActionInput = 
@@ -201,7 +236,9 @@ export type ActionInput =
 /**  A non-negative whole number of replicas. */
 "replicas" | 
 /**  A remote port (number or name) and an optional local port. */
-"port";
+"port" | 
+/**  The container to debug and the debug image. */
+"debug";
 
 /**  What an apply did. */
 export type ApplyOutcome = 
@@ -534,6 +571,13 @@ export type NamespaceInfo = {
 export type NodeCounts = {
 	total: number,
 	ready: number,
+};
+
+/**  A node shell pod still in the cluster. */
+export type NodeShellPod = {
+	namespace: string,
+	name: string,
+	node: string,
 };
 
 export type NodeUsage = {

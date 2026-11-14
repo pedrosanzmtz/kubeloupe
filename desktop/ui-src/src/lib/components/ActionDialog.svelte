@@ -2,6 +2,7 @@
   import { confirmCopy, isDestructive, listTargets } from "../actions";
   import { actionUi, canConfirm, closeDialog, confirmRequest } from "../stores/actions.svelte";
   import ForwardDialog from "./ForwardDialog.svelte";
+  import DebugDialog from "./DebugDialog.svelte";
 
   const req = $derived(actionUi.request);
   const copy = $derived(
@@ -24,6 +25,7 @@
 
 <svelte:window {onkeydown} />
 <ForwardDialog />
+<DebugDialog />
 
 {#if req && copy}
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->

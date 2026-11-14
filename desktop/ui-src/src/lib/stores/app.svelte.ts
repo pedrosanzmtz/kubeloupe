@@ -2,6 +2,7 @@ import { commands } from "../bindings";
 import type { ContextInfo, NamespaceInfo, ResourceKind } from "../bindings";
 import { joinNames, normalizeNamespaces, sameNamespaces } from "../namespaces";
 import { closeDetail, detail, openDetail } from "./detail.svelte";
+import { checkLeftovers } from "./debug.svelte";
 import { closeAllDockTabs } from "./dock.svelte";
 import { whenDiscarded } from "./unsaved.svelte";
 
@@ -239,6 +240,7 @@ export async function switchContext(name: string) {
   await loadNamespaces();
   await initScope();
   refresh();
+  void checkLeftovers();
 }
 
 /**

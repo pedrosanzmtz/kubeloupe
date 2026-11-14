@@ -19,7 +19,10 @@ mod shell_kubeconfig;
 
 pub mod actions;
 pub mod auth;
+pub mod debug;
+pub mod node_shell;
 pub mod resources;
+pub mod terminal;
 pub mod watch;
 pub mod workload_logs;
 

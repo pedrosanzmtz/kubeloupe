@@ -251,6 +251,26 @@ async fn run(cli: Cli) -> Result<()> {
             ports,
             namespace,
         } => run_port_forward(&client, namespace.as_deref(), &target, &ports).await?,
+        Commands::Debug {
+            pod,
+            namespace,
+            container,
+            image,
+        } => {
+            kubeloupe::terminal::cli_debug(
+                &client,
+                namespace.as_deref().unwrap_or("default"),
+                &pod,
+                container.as_deref(),
+                &image,
+            )
+            .await?
+        }
+        Commands::NodeShell {
+            node,
+            namespace,
+            image,
+        } => kubeloupe::terminal::cli_node_shell(&client, &node, &namespace, &image).await?,
         Commands::Exec {
             name,
             namespace,

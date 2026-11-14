@@ -26,6 +26,24 @@ pub(crate) struct ExecSession {
     pub(crate) stdin_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
     pub(crate) size_tx: Option<futures::channel::mpsc::Sender<TerminalSize>>,
     pub(crate) task: tauri::async_runtime::JoinHandle<()>,
+    /// What to remove when the session ends (a node shell's pod).
+    pub(crate) cleanup: Option<SessionCleanup>,
+}
+
+/// A pod a terminal session created and must delete when it ends: closed,
+/// shell exited, context switched or app quit.
+#[derive(Clone)]
+pub(crate) struct SessionCleanup {
+    pub(crate) client: Client,
+    pub(crate) namespace: String,
+    pub(crate) pod: String,
+}
+
+impl SessionCleanup {
+    pub(crate) async fn run(self) {
+        let _ = kubeloupe::node_shell::delete_node_shell(&self.client, &self.namespace, &self.pod)
+            .await;
+    }
 }
 
 /// A running port-forward; dropping it stops it.
@@ -78,10 +96,21 @@ pub(crate) async fn client(state: &State<'_, AppState>) -> Result<Client, String
 }
 
 pub(crate) fn stop_all_exec(state: &State<'_, AppState>) {
-    let mut sessions = state.exec_sessions.lock().unwrap();
-    for (_, session) in sessions.drain() {
-        session.task.abort();
+    for c in take_all_exec(&state.exec_sessions) {
+        tauri::async_runtime::spawn(c.run());
     }
+}
+
+/// Stop every terminal session; returns the cleanups still to run.
+pub(crate) fn take_all_exec(sessions: &Mutex<HashMap<String, ExecSession>>) -> Vec<SessionCleanup> {
+    let mut sessions = sessions.lock().unwrap();
+    sessions
+        .drain()
+        .filter_map(|(_, session)| {
+            session.task.abort();
+            session.cleanup
+        })
+        .collect()
 }
 
 /// Kill every local shell and delete their temp kubeconfigs.

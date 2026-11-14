@@ -18,6 +18,10 @@ export type DockTabSpec =
   | { type: "workloadLogs"; workload: WorkloadRef }
   /** `container`: undefined picks the pod's first regular container. */
   | { type: "terminal"; pod: PodTabRef; container?: string | null }
+  /** An ephemeral debug container sharing `target`'s processes. */
+  | { type: "debug"; pod: PodTabRef; target: string; image: string }
+  /** A root shell on a node through a privileged pod in `namespace`. */
+  | { type: "nodeShell"; node: string; namespace: string }
   /**
    * A shell on this machine, pointed at `context` and `namespace` as they
    * were when it opened. `seq` tells several of them apart.
@@ -41,6 +45,10 @@ export function tabId(spec: DockTabSpec): string {
       return `wlogs:${spec.workload.kind}:${spec.workload.namespace}/${spec.workload.name}`;
     case "terminal":
       return `shell:${spec.pod.namespace}/${spec.pod.name}`;
+    case "debug":
+      return `debug:${spec.pod.namespace}/${spec.pod.name}/${spec.target}`;
+    case "nodeShell":
+      return `node:${spec.node}`;
     case "localShell":
       return `local:${spec.seq}`;
   }
@@ -54,6 +62,10 @@ export function tabTitle(spec: DockTabSpec): string {
       return `Logs: ${spec.workload.kind.toLowerCase()}/${spec.workload.name}`;
     case "terminal":
       return `Shell: ${spec.pod.name}`;
+    case "debug":
+      return `Debug: ${spec.pod.name}`;
+    case "nodeShell":
+      return `Node: ${spec.node}`;
     case "localShell":
       return localShellTitle(spec.context, spec.namespace);
   }

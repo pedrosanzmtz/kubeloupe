@@ -2,11 +2,16 @@
   import { commands } from "../bindings";
   import type { PodRef } from "../stores/detail.svelte";
 
-  /** A shell in a pod, or one on this machine pointed at `namespace`. */
+  /** A shell in a pod, one on this machine pointed at `namespace`, an
+   *  ephemeral debug container, or a root shell on a node. */
   export type TerminalTarget =
     /** `container`: `null` lets the API server pick. */
     | { kind: "pod"; pod: PodRef; container: string | null }
-    | { kind: "local"; namespace: string };
+    | { kind: "local"; namespace: string }
+    /** Adds a container running `image` that shares `target`'s processes, then attaches. */
+    | { kind: "debug"; pod: PodRef; target: string; image: string }
+    /** A privileged pod on `node` in `namespace`, deleted when the session ends. */
+    | { kind: "nodeShell"; node: string; namespace: string };
 
   /** The session commands of a target. Both kinds stream through the
    *  `exec-output` and `exec-closed` events. */
@@ -16,9 +21,33 @@
     input(id: string, data: string): Promise<unknown>;
     resize(id: string, cols: number, rows: number): Promise<unknown>;
     close(id: string): Promise<unknown>;
+    /** The session id `start` runs under when the UI picks it: its output
+     *  (progress while a container or pod starts) shows before `start` resolves. */
+    pending?: string;
+  }
+
+  function randomId(): string {
+    if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
   }
 
   function backendFor(t: TerminalTarget): Backend {
+    if (t.kind === "debug" || t.kind === "nodeShell") {
+      const pending = `ui-${randomId()}`;
+      return {
+        pending,
+        start: async (cols, rows) => ({
+          id:
+            t.kind === "debug"
+              ? await commands.cmdDebugStart(pending, t.pod.namespace, t.pod.name, t.target, t.image, cols, rows)
+              : await commands.cmdNodeShellStart(pending, t.node, t.namespace, cols, rows),
+          intro: "",
+        }),
+        input: commands.cmdExecInput,
+        resize: commands.cmdExecResize,
+        close: commands.cmdExecClose,
+      };
+    }
     if (t.kind === "pod") {
       return {
         start: async (cols, rows) => ({
@@ -118,7 +147,7 @@
       events.execOutput.listen((e) => {
         const { session: id, data } = e.payload;
         if (!term) return;
-        if (id === session) term.write(data);
+        if (id === session || (id === backend?.pending && !session)) term.write(data);
         else if (!session) early.set(id, [...(early.get(id) ?? []), data]);
       }),
       events.execClosed.listen((e) => {

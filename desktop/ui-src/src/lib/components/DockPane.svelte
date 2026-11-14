@@ -17,7 +17,7 @@
   let ready = $state(false);
 
   onMount(async () => {
-    if (tab.type === "localShell") {
+    if (tab.type === "localShell" || tab.type === "debug" || tab.type === "nodeShell") {
       ready = true;
       return;
     }
@@ -49,6 +49,10 @@
     <LogViewer workload={tab.workload} hidden={!active} />
   {:else if tab.type === "localShell"}
     <Terminal target={{ kind: "local", namespace: tab.namespace }} {active} />
+  {:else if tab.type === "debug"}
+    <Terminal target={{ kind: "debug", pod: tab.pod, target: tab.target, image: tab.image }} {active} />
+  {:else if tab.type === "nodeShell"}
+    <Terminal target={{ kind: "nodeShell", node: tab.node, namespace: tab.namespace }} {active} />
   {:else if ready}
     <Terminal target={{ kind: "pod", pod: tab.pod, container: shell }} {active} />
   {/if}
