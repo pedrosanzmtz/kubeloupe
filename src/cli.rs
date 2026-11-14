@@ -2,8 +2,8 @@
 
 use crate::{
     exec_command, format_cpu, format_memory, get_namespaces, get_node_metrics, get_nodes,
-    get_pod_logs, get_pod_metrics, get_pods, resources, serve_port_forward, stream_pod_logs, watch,
-    LogOptions, PodUsage,
+    get_pod_logs, get_pod_metrics, get_pods, resources, stream_pod_logs, watch, ForwardStatus,
+    ForwardTarget, LogOptions, PodUsage, PortForward, PortSpec,
 };
 use anyhow::{Context, Result};
 use kube::Client;
@@ -149,20 +149,63 @@ pub async fn print_top_nodes(client: &Client) -> Result<()> {
     Ok(())
 }
 
-/// Forward a pod port to localhost until Ctrl-C (CLI output).
+/// Forward ports of a pod, Service or workload to localhost until Ctrl-C
+/// (CLI output). Prints which pod serves each forward when it changes, and
+/// errors as they happen.
 pub async fn run_port_forward(
     client: &Client,
     namespace: Option<&str>,
-    name: &str,
-    port: u16,
+    target: &str,
+    ports: &[String],
 ) -> Result<()> {
-    let (local_port, handle) =
-        serve_port_forward(client, namespace.unwrap_or("default"), name, port).await?;
-    println!("Forwarding from 127.0.0.1:{local_port} -> {name}:{port} (Ctrl-C to stop)");
-    tokio::signal::ctrl_c().await?;
-    handle.abort();
+    let ns = namespace.unwrap_or(client.default_namespace());
+    let target = ForwardTarget::parse(target, ns)?;
+    let specs = ports
+        .iter()
+        .map(|p| PortSpec::parse(p))
+        .collect::<Result<Vec<_>>>()?;
+    let mut forwards = Vec::new();
+    for spec in specs {
+        let f = PortForward::start(client, target.clone(), spec.remote, spec.local).await?;
+        println!(
+            "Forwarding from 127.0.0.1:{} -> {}:{}",
+            f.local_port,
+            target_label(&target),
+            f.remote
+        );
+        forwards.push(f);
+    }
+    println!("Ctrl-C to stop.");
+    let mut last: Vec<ForwardStatus> = forwards.iter().map(|f| f.status()).collect();
+    for (f, s) in forwards.iter().zip(&last) {
+        println!("  127.0.0.1:{} served by pod {}", f.local_port, s.pod);
+    }
+    let mut tick = tokio::time::interval(std::time::Duration::from_millis(500));
+    loop {
+        tokio::select! {
+            r = tokio::signal::ctrl_c() => { r?; break; }
+            _ = tick.tick() => {
+                for (f, prev) in forwards.iter().zip(last.iter_mut()) {
+                    let now = f.status();
+                    if now.pod != prev.pod {
+                        println!("  127.0.0.1:{} now served by pod {}", f.local_port, now.pod);
+                    }
+                    if now.last_error != prev.last_error && !now.last_error.is_empty() {
+                        eprintln!("  127.0.0.1:{}: {}", f.local_port, now.last_error);
+                    }
+                    *prev = now;
+                }
+            }
+        }
+    }
+    drop(forwards);
     println!("Port-forward stopped.");
     Ok(())
+}
+
+/// `svc/api` (the namespace is implied by `-n`).
+fn target_label(t: &ForwardTarget) -> String {
+    format!("{}/{}", t.kind.short(), t.name)
 }
 
 /// Run a command in a pod and print its output (CLI output).

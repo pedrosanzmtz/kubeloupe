@@ -48,6 +48,9 @@ pub enum ActionId {
     Trigger,
     Suspend,
     Resume,
+    /// Start a port-forward. Long-running, so the UI and the CLI handle it
+    /// themselves ([`crate::PortForward`]); [`run_action`] refuses it.
+    PortForward,
 }
 
 /// An extra value the action needs before it can run.
@@ -59,6 +62,8 @@ pub enum ActionInput {
     None,
     /// A non-negative whole number of replicas.
     Replicas,
+    /// A remote port (number or name) and an optional local port.
+    Port,
 }
 
 /// One action offered for a kind.
@@ -117,6 +122,19 @@ pub fn actions_for(r: &ResourceRef, verbs: &[String]) -> Vec<ActionDef> {
             out.push(def(Resume, "Resume"));
         }
         _ => {}
+    }
+    if matches!(
+        (r.group.as_str(), r.kind.as_str()),
+        ("", "Pod" | "Service")
+            | (
+                "apps",
+                "Deployment" | "StatefulSet" | "ReplicaSet" | "DaemonSet"
+            )
+    ) {
+        out.push(ActionDef {
+            input: ActionInput::Port,
+            ..def(PortForward, "Port forward…")
+        });
     }
     if verbs.iter().any(|v| v == "delete") {
         out.push(ActionDef {
@@ -456,6 +474,7 @@ pub async fn run_action(
             format!("Force deleted {what}")
         }
         ActionId::Drain => bail!("drain reports progress: use drain_node"),
+        ActionId::PortForward => bail!("a port-forward keeps running: use PortForward::start"),
     })
 }
 
@@ -832,22 +851,32 @@ mod tests {
     fn registry_per_kind() {
         use ActionId::*;
         let d = ["delete"];
-        assert_eq!(ids("apps", "Deployment", &d), [Scale, Restart, Delete]);
-        assert_eq!(ids("apps", "StatefulSet", &d), [Scale, Restart, Delete]);
-        assert_eq!(ids("apps", "ReplicaSet", &d), [Scale, Delete]);
-        assert_eq!(ids("apps", "DaemonSet", &d), [Restart, Delete]);
+        assert_eq!(
+            ids("apps", "Deployment", &d),
+            [Scale, Restart, PortForward, Delete]
+        );
+        assert_eq!(
+            ids("apps", "StatefulSet", &d),
+            [Scale, Restart, PortForward, Delete]
+        );
+        assert_eq!(ids("apps", "ReplicaSet", &d), [Scale, PortForward, Delete]);
+        assert_eq!(ids("apps", "DaemonSet", &d), [Restart, PortForward, Delete]);
+        assert_eq!(ids("", "Service", &d), [PortForward, Delete]);
         assert_eq!(ids("", "Node", &d), [Cordon, Uncordon, Drain, Delete]);
         assert_eq!(
             ids("batch", "CronJob", &d),
             [Trigger, Suspend, Resume, Delete]
         );
-        assert_eq!(ids("", "Pod", &d), [Delete, ForceDelete]);
+        assert_eq!(ids("", "Pod", &d), [PortForward, Delete, ForceDelete]);
         assert_eq!(ids("", "ConfigMap", &d), [Delete]);
         // Same kind name in another group gets nothing special.
         assert_eq!(ids("example.com", "Deployment", &d), [Delete]);
         // No delete verb, no delete.
         assert!(ids("", "ConfigMap", &["get", "list"]).is_empty());
-        assert_eq!(ids("apps", "Deployment", &[]), [Scale, Restart]);
+        assert_eq!(
+            ids("apps", "Deployment", &[]),
+            [Scale, Restart, PortForward]
+        );
     }
 
     #[test]
@@ -867,6 +896,10 @@ mod tests {
         assert_eq!(
             find("apps", "Deployment", ActionId::Scale).input,
             ActionInput::Replicas
+        );
+        assert_eq!(
+            find("", "Service", ActionId::PortForward).input,
+            ActionInput::Port
         );
         assert!(scale_is_destructive(0));
         assert!(!scale_is_destructive(1));

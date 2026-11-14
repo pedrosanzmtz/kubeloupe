@@ -14,8 +14,8 @@ async function contextMenu(page: Page, name: string) {
 test("the context menu offers the actions of each kind", async ({ page }) => {
   await openApp(page);
   const cases: [string, string, string, string[]][] = [
-    ["Pods", "web-1", "demo/web-1", ["Delete", "Force delete…"]],
-    ["Deployments", "web", "demo/web", ["Scale…", "Rollout restart", "Delete"]],
+    ["Pods", "web-1", "demo/web-1", ["Port forward…", "Delete", "Force delete…"]],
+    ["Deployments", "web", "demo/web", ["Scale…", "Rollout restart", "Port forward…", "Delete"]],
     ["Nodes", "node-1", "node-1", ["Cordon", "Uncordon", "Drain…", "Delete"]],
     ["Secrets", "db-creds", "demo/db-creds", ["Delete"]],
   ];
@@ -36,6 +36,7 @@ test("the detail panel offers the same actions", async ({ page }) => {
   await expect(page.getByRole("toolbar", { name: "Actions" }).getByRole("button")).toHaveText([
     "Scale…",
     "Rollout restart",
+    "Port forward…",
     "Delete",
   ]);
 });

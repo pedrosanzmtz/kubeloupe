@@ -34,8 +34,8 @@ use kubeloupe::watch::WatchState;
 use kubeloupe::{
     apply_pod_yaml, client_for_context, default_namespace, exec_command, get_namespaces, get_nodes,
     get_overview, get_pod_logs, get_pod_metrics, get_pod_yaml, get_pods, is_forbidden,
-    list_namespaces_if_allowed, pod_ref, serve_port_forward, stream_pod_logs, stream_workload_logs,
-    LogOptions, WorkloadEvent, WorkloadKind,
+    list_namespaces_if_allowed, pod_ref, stream_pod_logs, stream_workload_logs, LogOptions,
+    WorkloadEvent, WorkloadKind,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -370,12 +370,19 @@ async fn exec_in_named_container() -> Result<()> {
 async fn port_forward_serves_http() -> Result<()> {
     let client = connect().await?;
     let pod = first_running_demo_pod(&client, "web-").await?;
-    let (port, handle) = within(
-        "serve_port_forward",
+    let target = kubeloupe::ForwardTarget::parse(&pod, "demo")?;
+    let fwd = within(
+        "PortForward::start",
         TIMEOUT,
-        serve_port_forward(&client, "demo", &pod, 80),
+        kubeloupe::PortForward::start(
+            &client,
+            target,
+            kubeloupe::RemotePort::Number(80),
+            kubeloupe::LocalPort::Random,
+        ),
     )
     .await?;
+    let port = fwd.local_port;
     let res = within("http request", Duration::from_secs(30), async {
         let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port)).await?;
         s.write_all(b"GET / HTTP/1.0\r\nHost: localhost\r\n\r\n")
@@ -385,7 +392,7 @@ async fn port_forward_serves_http() -> Result<()> {
         Ok(buf)
     })
     .await;
-    handle.abort();
+    drop(fwd);
     let body = res?;
     ensure!(body.contains(" 200 OK"), "{body}");
     ensure!(body.contains("Welcome to nginx"), "{body}");

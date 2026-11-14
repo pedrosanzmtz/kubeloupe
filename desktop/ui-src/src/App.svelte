@@ -14,6 +14,8 @@
   import TableView from "./lib/components/TableView.svelte";
   import DetailPanel from "./lib/components/DetailPanel.svelte";
   import GenericDetail from "./lib/components/GenericDetail.svelte";
+  import PortForwards from "./lib/components/PortForwards.svelte";
+  import { PORT_FORWARDS_VIEW } from "./lib/forwards";
   import { isPod } from "./lib/columns";
   import {
     app,
@@ -64,13 +66,15 @@
 <div class="main">
   <Sidebar />
   <section class="content">
-    {#if app.view !== "overview"}
+    {#if app.view !== "overview" && app.view !== PORT_FORWARDS_VIEW}
       <Toolbar />
     {/if}
     <ErrorBanner />
     <ActionNotice />
     {#if app.view === "overview"}
       <Overview />
+    {:else if app.view === PORT_FORWARDS_VIEW}
+      <PortForwards />
     {:else if kind}
       {#key kind.id}
         <TableView {kind} />

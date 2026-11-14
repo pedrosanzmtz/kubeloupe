@@ -7,6 +7,7 @@
   import MetaSection from "./MetaSection.svelte";
   import YamlEditor from "./YamlEditor.svelte";
   import LogViewer from "./LogViewer.svelte";
+  import ServicePorts from "./ServicePorts.svelte";
   import { WORKLOAD_KINDS } from "../logs";
   import { closeDetail } from "../stores/detail.svelte";
   import type { Target } from "../stores/detail.svelte";
@@ -68,6 +69,9 @@
         <p class="muted">Loading…</p>
       {:else}
         <MetaSection {info} />
+        {#if target.resource.group === "" && target.resource.kind === "Service"}
+          <ServicePorts namespace={target.namespace} name={target.name} disabled={live.deleted} />
+        {/if}
 
         {#if info.secret_keys.length > 0}
           <h3>Data</h3>

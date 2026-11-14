@@ -6,6 +6,7 @@ import type {
   ColumnKind,
   ContextInfo_Serialize,
   FieldTakeover,
+  ForwardInfo,
   MetricsSnapshot,
   NamespaceInfo,
   Overview_Serialize,
@@ -14,6 +15,7 @@ import type {
   ResourceDetail,
   ResourceKind,
   ResourceRow,
+  ServicePortInfo,
   StateInfo,
 } from "../../lib/bindings";
 import { DISCOVERED } from "./discover";
@@ -50,6 +52,10 @@ export interface FakeCluster {
   bulkErrors: Record<string, string>;
   /** `cmd_apply_manifests` rejects objects with these names (dry run included), with the given reason. */
   applyErrors: Record<string, string>;
+  /** Running port-forwards (`cmd_portforward_*`); change a status to simulate errors. */
+  forwards: ForwardInfo[];
+  /** `cmd_service_ports`, by `namespace/name`. */
+  servicePorts: Record<string, ServicePortInfo[]>;
   overview: Overview_Serialize;
   metrics: MetricsSnapshot;
 }
@@ -207,6 +213,7 @@ export function defaultCluster(): FakeCluster {
       ],
       "v1/secrets": [row("v1/secrets", "demo", "db-creds", { type: "Opaque", data: "1" })],
       "v1/configmaps": [row("v1/configmaps", "demo", "settings", { data: "2" })],
+      "v1/services": [row("v1/services", "demo", "api", { type: "ClusterIP" })],
       "example.com/v1/widgets": [row("example.com/v1/widgets", "demo", "gizmo")],
     },
     details: podDetails(kinds),
@@ -228,6 +235,14 @@ export function defaultCluster(): FakeCluster {
     resourceVersions: {},
     bulkErrors: {},
     applyErrors: {},
+    forwards: [],
+    servicePorts: {
+      "demo/api": [
+        { name: "http", port: 80, protocol: "TCP", target_port: "web" },
+        { name: "metrics", port: 9090, protocol: "TCP", target_port: "9090" },
+        { name: "dns", port: 53, protocol: "UDP", target_port: "53" },
+      ],
+    },
     overview: {
       namespaces: 3,
       nodes: { total: 2, ready: 2 },
