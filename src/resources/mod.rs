@@ -13,24 +13,33 @@
 //! - `ops`: list / get / YAML get and apply / delete
 //! - `manifests`, `apply`: create or update objects from a manifest file
 //! - `detail`: the detail panel for any kind
+//! - `pod_detail`: the pod section of the detail panel (containers, probes, ...)
+//! - `detail_watch`: live updates of one object's detail
 //! - `table`: `kubectl get`-style table output for the CLI
 
 mod apply;
 mod columns;
 mod detail;
+mod detail_watch;
 mod discovery;
 mod jsonpath;
 mod manifests;
 mod ops;
+mod pod_detail;
 mod table;
 
 pub use apply::{apply_manifests, cli_apply, ApplyResult, ApplyStatus, ManifestOptions};
 pub use columns::make_row;
-pub use detail::get_resource_detail;
+pub use detail::{detail_of, get_resource_detail, summarize_events};
+pub use detail_watch::{run_detail_watch, DetailState, DETAIL_FLUSH};
 pub use discovery::{can_list, check_access, discover, resolve_kind};
 pub use ops::{
     apply_resource_yaml, apply_resource_yaml_with, delete_resource, dyn_api, get_resource,
     get_resource_yaml, list_resources, ApplyOptions, ApplyOutcome, FieldTakeover,
+};
+pub use pod_detail::{
+    env_refs, pod_extras, probe_summary, state_info, ContainerDetail, ContainerKind, EnvInfo,
+    MountInfo, PodExtras, PortInfo, ProbeInfo, StateInfo,
 };
 pub use table::render_table;
 
@@ -175,7 +184,7 @@ pub struct AccessResult {
     pub allowed: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct OwnerLink {
     pub api_version: String,
@@ -184,7 +193,7 @@ pub struct OwnerLink {
     pub controller: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct ConditionInfo {
     #[serde(rename = "type")]
@@ -195,7 +204,7 @@ pub struct ConditionInfo {
     pub age: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct RelatedEvent {
     #[serde(rename = "type")]
@@ -206,7 +215,7 @@ pub struct RelatedEvent {
     pub age: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct SecretKey {
     pub key: String,
@@ -214,8 +223,8 @@ pub struct SecretKey {
     pub bytes: u32,
 }
 
-/// Everything the generic detail panel shows besides the YAML.
-#[derive(Debug, Clone, Serialize)]
+/// Everything the detail panel shows besides the YAML.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct ResourceDetail {
     pub name: String,
@@ -233,6 +242,9 @@ pub struct ResourceDetail {
     /// Keys of a Secret's data (never the values).
     pub secret_keys: Vec<SecretKey>,
     pub events: Vec<RelatedEvent>,
+    /// The pod section: filled for pods, empty (default) for other kinds.
+    /// Not an `Option`, which would split the TypeScript type in two.
+    pub pod: PodExtras,
 }
 
 #[cfg(test)]

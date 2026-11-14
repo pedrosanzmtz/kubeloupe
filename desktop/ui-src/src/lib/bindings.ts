@@ -18,7 +18,6 @@ export const commands = {
 	 *  across all namespaces; ignored for cluster-scoped kinds).
 	 */
 	cmdCheckAccess: (kinds: ResourceRef[], namespace: string | null, options?: InvokeOptions) => __TAURI_INVOKE<AccessResult[]>("cmd_check_access", { kinds, namespace }, options),
-	cmdGetPodDetails: (namespace: string, name: string, options?: InvokeOptions) => __TAURI_INVOKE<PodDetail>("cmd_get_pod_details", { namespace, name }, options),
 	cmdStreamPodLogs: (namespace: string, name: string, container: string | null, previous: boolean | null, tailLines: number | null, sinceSeconds: number | null, timestamps: boolean | null, streamId: number, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_stream_pod_logs", { namespace, name, container, previous, tailLines, sinceSeconds, timestamps, streamId }, options),
 	cmdStopPodLogs: (options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_stop_pod_logs", undefined, options),
 	/**
@@ -56,7 +55,13 @@ export const commands = {
 	 *  watch id carried by the `watch-batch` / `watch-state` events.
 	 */
 	cmdWatchStart: (resource: ResourceRef, namespace: string | null, options?: InvokeOptions) => __TAURI_INVOKE<string>("cmd_watch_start", { resource, namespace }, options),
+	/**  Stop a table watch or a detail watch. */
 	cmdWatchStop: (id: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_watch_stop", { id }, options),
+	/**
+	 *  Watch one object for the detail panel. Returns the watch id carried by
+	 *  the `detail-watch` events; stop it with `cmd_watch_stop`.
+	 */
+	cmdDetailWatch: (resource: ResourceRef, namespace: string, name: string, options?: InvokeOptions) => __TAURI_INVOKE<string>("cmd_detail_watch", { resource, namespace, name }, options),
 	cmdListContexts: (options?: InvokeOptions) => __TAURI_INVOKE<ContextInfo_Serialize[]>("cmd_list_contexts", undefined, options),
 	cmdSetContext: (name: string | null, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_set_context", { name }, options),
 	/**
@@ -73,6 +78,7 @@ export const commands = {
 	 */
 	cmdPortforwardStart: (namespace: string, name: string, port: number, options?: InvokeOptions) => __TAURI_INVOKE<PortForwardInfo>("cmd_portforward_start", { namespace, name, port }, options),
 	cmdPortforwardStop: (session: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_portforward_stop", { session }, options),
+	/**  Detail of any object; pods include their `pod` section. */
 	cmdGetResourceDetail: (resource: ResourceRef, namespace: string, name: string, options?: InvokeOptions) => __TAURI_INVOKE<ResourceDetail>("cmd_get_resource_detail", { resource, namespace, name }, options),
 	/**  An object as YAML. Secret values stay hidden unless `reveal` is set. */
 	cmdGetResourceYaml: (resource: ResourceRef, namespace: string, name: string, reveal: boolean, options?: InvokeOptions) => __TAURI_INVOKE<string>("cmd_get_resource_yaml", { resource, namespace, name, reveal }, options),
@@ -115,6 +121,7 @@ export const commands = {
 
 /** Events */
 export const events = {
+	detailWatch: makeEvent<DetailWatchEvent, DetailWatchEvent>("detail-watch"),
 	drainFinished: makeEvent<DrainFinished, DrainFinished>("drain-finished"),
 	drainProgress: makeEvent<DrainProgress, DrainProgress>("drain-progress"),
 	execClosed: makeEvent<ExecClosed, ExecClosed>("exec-closed"),
@@ -249,13 +256,24 @@ export type ConditionInfo = {
 	age: string,
 };
 
-export type ContainerInfo = {
+export type ContainerDetail = {
 	name: string,
+	kind: ContainerKind,
 	image: string,
+	image_id: string,
+	state: StateInfo,
+	last_state: StateInfo,
 	ready: boolean,
 	restarts: number,
-	state: string,
+	requests: { [key in string]: string },
+	limits: { [key in string]: string },
+	ports: PortInfo[],
+	probes: ProbeInfo[],
+	mounts: MountInfo[],
+	env: EnvInfo[],
 };
+
+export type ContainerKind = "init" | "regular" | "ephemeral";
 
 export type ContextInfo = ContextInfo_Serialize | ContextInfo_Deserialize;
 
@@ -272,6 +290,20 @@ export type ContextInfo_Serialize = {
 	/**  The context's default namespace (`contexts[].context.namespace`). */
 	namespace: string | null,
 };
+
+/**  What a detail watch reports. */
+export type DetailState = 
+/**  The object as it is now. */
+{ state: "detail"; detail: ResourceDetail } | 
+/**  The object no longer exists (it may come back with the same name). */
+{ state: "deleted" } | 
+/**  The watch failed and is retrying; the last detail is still shown. */
+{ state: "error"; error: string };
+
+/**  A new detail (or `deleted`, or a watch error) for the detail watch `id`. */
+export type DetailWatchEvent = {
+	id: string,
+} & DetailState;
 
 /**  Progress of a drain. */
 export type DrainEvent = { type: "cordoned"; node: string } | 
@@ -306,6 +338,18 @@ export type DrainSummary = {
 	skipped: number,
 	/**  Evicted pods that had not finished terminating when the timeout hit. */
 	still_terminating: number,
+};
+
+/**  An env variable. Literal values are never included. */
+export type EnvInfo = {
+	/**  The variable, or `<prefix>*` for a whole `envFrom` source. */
+	name: string,
+	/**
+	 *  Empty for a literal value, else `secret:name/key`, `configmap:name/key`,
+	 *  `field:metadata.name`, `resource:limits.cpu`, or for `envFrom`
+	 *  `secret:name` / `configmap:name`.
+	 */
+	source: string,
 };
 
 export type EventInfo = {
@@ -345,6 +389,13 @@ export type MetricsSnapshot = {
 	available: boolean,
 	pods: PodUsage[],
 	nodes: NodeUsage[],
+};
+
+export type MountInfo = {
+	name: string,
+	path: string,
+	sub_path: string,
+	read_only: boolean,
 };
 
 export type NamespaceInfo = {
@@ -448,16 +499,21 @@ export type PodCounts_Serialize = {
 	by_namespace: ([string, number])[],
 };
 
-export type PodDetail = {
-	name: string,
-	namespace: string,
+/**  Pod-only part of a [`super::ResourceDetail`]. */
+export type PodExtras = {
 	phase: string,
+	/**  Why the pod is in that phase (`Evicted`, ...), if the kubelet says. */
+	reason: string,
+	message: string,
 	node: string,
-	ip: string,
-	age: string,
-	labels: { [key in string]: string },
-	containers: ContainerInfo[],
-	/**  Every container in the spec, init containers first, for the log picker. */
+	pod_ips: string[],
+	host_ip: string,
+	qos_class: string,
+	priority_class: string,
+	service_account: string,
+	/**  Init containers first, then regular, then ephemeral. */
+	containers: ContainerDetail[],
+	/**  Every init and regular container, for the log picker. */
 	log_containers: LogContainer[],
 };
 
@@ -493,6 +549,19 @@ export type PortForwardInfo = {
 	local_port: number,
 };
 
+export type PortInfo = {
+	name: string,
+	port: number,
+	protocol: string,
+};
+
+export type ProbeInfo = {
+	/**  `liveness`, `readiness` or `startup`. */
+	kind: string,
+	/**  Like `kubectl describe`: `http-get :8080/healthz delay=5s timeout=1s period=10s #success=1 #failure=3`. */
+	summary: string,
+};
+
 /**  Recent events, across the cluster or in one namespace. */
 export type RecentEvents = RecentEvents_Serialize | RecentEvents_Deserialize;
 
@@ -518,7 +587,7 @@ export type RelatedEvent = {
 	age: string,
 };
 
-/**  Everything the generic detail panel shows besides the YAML. */
+/**  Everything the detail panel shows besides the YAML. */
 export type ResourceDetail = {
 	name: string,
 	namespace: string,
@@ -535,6 +604,11 @@ export type ResourceDetail = {
 	/**  Keys of a Secret's data (never the values). */
 	secret_keys: SecretKey[],
 	events: RelatedEvent[],
+	/**
+	 *  The pod section: filled for pods, empty (default) for other kinds.
+	 *  Not an `Option`, which would split the TypeScript type in two.
+	 */
+	pod: PodExtras,
 };
 
 /**  One entry of the sidebar: a discovered resource type with its columns. */
@@ -582,6 +656,18 @@ export type SecretKey = {
 	key: string,
 	/**  Decoded size in bytes. */
 	bytes: number,
+};
+
+/**  A container state (current or last). `state` is empty when there is none. */
+export type StateInfo = {
+	/**  `running`, `waiting`, `terminated`, or empty. */
+	state: string,
+	reason: string,
+	message: string,
+	/**  Only meaningful when terminated. */
+	exit_code: number,
+	/**  Age of the start (running) or the finish (terminated). */
+	since: string,
 };
 
 /**  A log line and where it came from. */

@@ -3,8 +3,9 @@
   import type { Target } from "../stores/detail.svelte";
 
   /** Buttons for every action the registry lists for the object's kind. The
-   *  context menu in the table reads the same list. */
-  let { target }: { target: Target } = $props();
+   *  context menu in the table reads the same list. `disabled` once the
+   *  object is gone. */
+  let { target, disabled = false }: { target: Target; disabled?: boolean } = $props();
 
   const kind = $derived(kindOfResource(target.resource));
 </script>
@@ -16,6 +17,7 @@
         type="button"
         class="btn"
         class:danger={a.destructive}
+        {disabled}
         onclick={() => requestAction(kind, [{ namespace: target.namespace, name: target.name }], a)}
       >
         {a.label}
@@ -35,5 +37,9 @@
   .btn.danger {
     border-color: var(--red);
     color: #f5a3a5;
+  }
+  .btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 </style>

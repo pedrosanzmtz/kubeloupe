@@ -1,34 +1,38 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import ActionBar from "./ActionBar.svelte";
+  import ConditionsTable from "./ConditionsTable.svelte";
+  import ContainerCard from "./ContainerCard.svelte";
+  import DetailNotices from "./DetailNotices.svelte";
+  import EventsTable from "./EventsTable.svelte";
   import LogViewer from "./LogViewer.svelte";
+  import MetaSection from "./MetaSection.svelte";
   import PortForward from "./PortForward.svelte";
   import Terminal from "./Terminal.svelte";
   import YamlEditor from "./YamlEditor.svelte";
-  import { commands } from "../bindings";
-  import type { PodDetail } from "../bindings";
   import { closeDetail } from "../stores/detail.svelte";
   import type { Target } from "../stores/detail.svelte";
+  import { LiveDetail } from "../stores/live-detail.svelte";
 
-  /** The pod panel: containers, logs, terminal and port-forward on top of
-   *  the generic YAML editor. Every other kind uses `GenericDetail`. */
+  /** The pod panel: the generic overview plus the pod section (containers,
+   *  QoS, IPs...), logs, terminal and port-forward, and the YAML editor.
+   *  Every other kind uses `GenericDetail`. */
   let { target }: { target: Target } = $props();
   const pod = $derived({ namespace: target.namespace, name: target.name });
 
-  let info = $state.raw<PodDetail | null>(null);
-  let loadError = $state("");
-  /** Details finished loading (successfully or not): logs may start. */
-  let ready = $state(false);
+  // The panel is remounted for every object, so `target` is fixed here.
+  // svelte-ignore state_referenced_locally
+  const live = new LiveDetail(target);
+  const info = $derived(live.info);
+  const extras = $derived(info?.pod ?? null);
   let terminalOpen = $state(false);
+  let portForward: PortForward | undefined = $state();
 
-  onMount(async () => {
-    try {
-      info = await commands.cmdGetPodDetails(pod.namespace, pod.name);
-    } catch (e) {
-      loadError = String(e);
-    }
-    ready = true;
-  });
+  onMount(() => void live.start());
+  onDestroy(() => live.stop());
+
+  /** The terminal opens in the first regular container. */
+  const shellContainer = $derived(extras?.containers.find((c) => c.kind === "regular")?.name ?? null);
 </script>
 
 <aside data-testid="detail-panel">
@@ -37,62 +41,71 @@
     <button type="button" class="close" aria-label="Close details" onclick={closeDetail}>✕</button>
   </div>
 
-  <ActionBar {target} />
+  <ActionBar {target} disabled={live.deleted} />
+  <DetailNotices {live} kind="Pod" />
 
   <div class="body">
-    {#if loadError}
-      <p class="error-text">Could not load pod details: {loadError}</p>
-    {:else if !info}
+    {#if live.loadError && !info}
+      <p class="error-text">Could not load pod details: {live.loadError}</p>
+    {:else if !info || !extras}
       <p class="muted">Loading…</p>
     {:else}
-      <dl class="meta">
+      <MetaSection {info}>
         <dt>Phase</dt>
-        <dd class="phase-{info.phase}">{info.phase}</dd>
+        <dd class="phase-{extras.phase}">
+          {extras.phase}{#if extras.reason}<span class="muted"> ({extras.reason})</span>{/if}
+        </dd>
+        {#if extras.message}
+          <dt>Message</dt>
+          <dd>{extras.message}</dd>
+        {/if}
         <dt>Node</dt>
-        <dd>{info.node}</dd>
-        <dt>IP</dt>
-        <dd>{info.ip || "—"}</dd>
-        <dt>Age</dt>
-        <dd>{info.age}</dd>
-      </dl>
-      {#if Object.keys(info.labels).length > 0}
-        <div class="labels">
-          {#each Object.entries(info.labels) as [k, v] (k)}
-            <span class="label-chip">{k}={v}</span>
-          {/each}
-        </div>
-      {/if}
+        <dd>{extras.node || "—"}</dd>
+        <dt>Pod IPs</dt>
+        <dd>{extras.pod_ips.join(", ") || "—"}</dd>
+        {#if extras.host_ip}
+          <dt>Host IP</dt>
+          <dd>{extras.host_ip}</dd>
+        {/if}
+        <dt>QoS</dt>
+        <dd>{extras.qos_class || "—"}</dd>
+        {#if extras.priority_class}
+          <dt>Priority</dt>
+          <dd>{extras.priority_class}</dd>
+        {/if}
+        <dt>Service acct</dt>
+        <dd>{extras.service_account || "—"}</dd>
+      </MetaSection>
+
       <h3>Containers</h3>
-      <div class="scroll-x">
-        <table>
-          <thead><tr><th>Name</th><th>Image</th><th>State</th><th>Restarts</th></tr></thead>
-          <tbody>
-            {#each info.containers as c (c.name)}
-              <tr><td>{c.name}</td><td>{c.image}</td><td>{c.state}</td><td>{c.restarts}</td></tr>
-            {:else}
-              <tr><td colspan="4">No containers.</td></tr>
-            {/each}
-          </tbody>
-        </table>
-      </div>
+      {#each extras.containers as c (c.kind + "/" + c.name)}
+        <ContainerCard container={c} disabled={live.deleted} onForward={(p) => portForward?.forward(p)} />
+      {:else}
+        <p class="muted">No containers.</p>
+      {/each}
+
+      <ConditionsTable conditions={info.conditions} />
+      <EventsTable events={info.events} />
     {/if}
   </div>
 
-  <LogViewer {pod} containers={info?.log_containers ?? []} {ready} />
+  <LogViewer {pod} containers={extras?.log_containers ?? []} ready={live.loaded} />
 
   <div class="section-header">
     <h3>Terminal</h3>
     {#if terminalOpen}
       <button type="button" class="btn" onclick={() => (terminalOpen = false)}>Close</button>
     {:else}
-      <button type="button" class="btn" onclick={() => (terminalOpen = true)}>Open terminal</button>
+      <button type="button" class="btn" disabled={live.deleted} onclick={() => (terminalOpen = true)}>
+        Open terminal
+      </button>
     {/if}
   </div>
   {#if terminalOpen}
-    <Terminal {pod} container={info?.containers[0]?.name ?? null} />
+    <Terminal {pod} container={shellContainer} />
   {/if}
 
-  <PortForward {pod} />
+  <PortForward bind:this={portForward} {pod} disabled={live.deleted} />
   <YamlEditor {target} />
 </aside>
 
@@ -136,43 +149,9 @@
   }
   .body {
     padding: 12px 16px;
-    overflow: auto;
   }
   .body h3 {
     margin: 14px 0 8px;
     font-size: 13px;
-  }
-  .body table {
-    font-size: 12px;
-  }
-  .scroll-x {
-    overflow-x: auto;
-  }
-  dl.meta {
-    display: grid;
-    grid-template-columns: 70px 1fr;
-    gap: 4px 12px;
-    margin: 0;
-    font-size: 13px;
-  }
-  dl.meta dt {
-    color: var(--text-muted);
-  }
-  dl.meta dd {
-    margin: 0;
-  }
-  .labels {
-    margin-top: 10px;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-  .label-chip {
-    background: var(--bg-hover);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 2px 6px;
-    font-size: 12px;
-    word-break: break-all;
   }
 </style>

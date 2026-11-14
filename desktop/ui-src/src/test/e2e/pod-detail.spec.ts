@@ -16,7 +16,7 @@ const logLines = (page: Page) => panel(page).getByTestId("log-line");
 
 test("the pod panel shows details and starts the log stream with the right args", async ({ page }) => {
   const fake = await openPod(page);
-  await expect(panel(page).getByRole("cell", { name: "nginx:1.27" })).toBeVisible();
+  await expect(panel(page).locator(".card .image").filter({ hasText: "nginx:1.27" })).toBeVisible();
   await expect(row(page, "web-1")).toHaveClass(/selected/);
 
   await expect.poll(() => fake.calls("cmdStreamPodLogs")).toHaveLength(1);
@@ -32,7 +32,9 @@ test("the pod panel shows details and starts the log stream with the right args"
     timestamps: false,
     streamId: await fake.lastStreamId(),
   });
-  expect(await fake.calls("cmdGetPodDetails")).toEqual([{ namespace: "demo", name: "web-1" }]);
+  expect(await fake.calls("cmdGetResourceDetail")).toEqual([
+    { resource: expect.objectContaining({ kind: "Pod", group: "" }), namespace: "demo", name: "web-1" },
+  ]);
 
   await fake.emitLogLines(["hello", "world"]);
   await expect(logLines(page)).toHaveText(["hello", "world"]);

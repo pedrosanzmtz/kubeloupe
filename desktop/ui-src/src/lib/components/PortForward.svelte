@@ -3,7 +3,7 @@
   import { commands } from "../bindings";
   import type { PodRef } from "../stores/detail.svelte";
 
-  let { pod }: { pod: PodRef } = $props();
+  let { pod, disabled = false }: { pod: PodRef; disabled?: boolean } = $props();
 
   let port = $state(80);
   let status = $state("");
@@ -31,6 +31,13 @@
     status = "";
   }
 
+  /** Forward `p` (from a container card's port list), replacing any forward. */
+  export function forward(p: number) {
+    stop();
+    port = p;
+    void start();
+  }
+
   onDestroy(stop);
 </script>
 
@@ -47,7 +54,7 @@
   {#if session}
     <button type="button" class="btn" onclick={stop}>Stop</button>
   {:else}
-    <button type="button" class="btn" onclick={start}>Forward</button>
+    <button type="button" class="btn" {disabled} onclick={start}>Forward</button>
   {/if}
 </div>
 <p class="detail-status muted">{status}</p>

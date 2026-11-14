@@ -31,8 +31,16 @@
 
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { commands, events } from "../lib/bindings";
-import type { ApplyResult, ResourceKind, ResourceRef, ResourceRow, WatchBatch, WatchState } from "../lib/bindings";
-import { defaultCluster, makeRow } from "./fixtures/cluster";
+import type {
+  ApplyResult,
+  DetailState,
+  ResourceKind,
+  ResourceRef,
+  ResourceRow,
+  WatchBatch,
+  WatchState,
+} from "../lib/bindings";
+import { defaultCluster, detail, makeRow, NO_POD } from "./fixtures/cluster";
 import type { FakeCluster } from "./fixtures/cluster";
 
 type Commands = typeof commands;
@@ -61,6 +69,12 @@ export interface FakeApi {
   emitWatchBatch(batch: Partial<WatchBatch>): Promise<void>;
   /** Send a `watch-state`; `id` defaults to the latest watch. */
   emitWatchState(state: WatchState & { id?: string }): Promise<void>;
+  /** Id of the most recent detail watch (`cmd_detail_watch`), or null. */
+  lastDetailWatchId(): string | null;
+  /** Ids of the detail watches that were started and not stopped. */
+  activeDetailWatches(): string[];
+  /** Send a `detail-watch`; `id` defaults to the latest detail watch. */
+  emitDetail(state: DetailState & { id?: string }): Promise<void>;
   /** Send `pod-log` lines; `streamId` defaults to the latest stream. */
   emitLogLines(lines: string[], streamId?: number): Promise<void>;
   /** Send `pod-log-error`, then (if `done`) `pod-log-done`. */
@@ -84,7 +98,10 @@ export function installFakeBackend(cluster: FakeCluster = defaultCluster()): Fak
   const calls = new Map<CommandName, CallArgs[]>();
   const failures = new Map<CommandName, string[]>();
   const watches: { id: string; kind: ResourceKind; namespace: string | null }[] = [];
+  /** Detail watches by id, with the `kindId|rowKey` they follow. */
+  const detailWatches = new Map<string, string>();
   let watchSeq = 0;
+  let detailSeq = 0;
   let drainSeq = 0;
   let sessionSeq = 0;
   let streamId: number | null = null;
@@ -106,12 +123,28 @@ export function installFakeBackend(cluster: FakeCluster = defaultCluster()): Fak
     return { kind, row };
   }
 
-  /** Remove a row and tell the watches of its kind, like the real watch would. */
+  /** Remove a row and tell the watches of its kind (and the detail watches
+   *  of the object), like the real watches would. */
   function removeRow(kind: ResourceKind, key: string) {
     cluster.rows[kind.id] = rowsOf(kind).filter((r) => r.key !== key);
     for (const w of watches) {
       if (w.kind.id === kind.id) void events.watchBatch.emit({ id: w.id, snapshot: false, applied: [], deleted: [key] });
     }
+    for (const [id, of] of detailWatches) {
+      if (of === `${kind.id}|${key}`) void events.detailWatch.emit({ id, state: "deleted" });
+    }
+  }
+
+  function detailOf(resource: ResourceRef, namespace: string, name: string) {
+    const { kind, row } = findRow(resource, namespace, name);
+    const known = cluster.details[`${kind.id}|${row.key}`];
+    if (known) return known;
+    return detail(kind, namespace, name, {
+      uid: `uid-${row.key}`,
+      created: row.created,
+      secret_keys: kind.resource.kind === "Secret" ? [{ key: "password", bytes: 7 }] : [],
+      pod: NO_POD,
+    });
   }
 
   function defaultYaml(kind: ResourceKind, row: ResourceRow): string {
@@ -245,13 +278,14 @@ export function installFakeBackend(cluster: FakeCluster = defaultCluster()): Fak
     cmdWatchStop: (id) => {
       const i = watches.findIndex((w) => w.id === id);
       if (i >= 0) watches.splice(i, 1);
+      detailWatches.delete(id);
       return null;
     },
-
-    cmdGetPodDetails: (namespace, name) => {
-      const pod = cluster.pods[rowKey(namespace, name)];
-      if (!pod) throw `pods "${name}" not found`;
-      return pod;
+    cmdDetailWatch: (resource, namespace, name) => {
+      const { kind, row } = findRow(resource, namespace, name);
+      const id = `detail-${++detailSeq}`;
+      detailWatches.set(id, `${kind.id}|${row.key}`);
+      return id;
     },
     cmdStreamPodLogs: (_namespace, _name, _container, _previous, _tail, _since, _timestamps, id) => {
       streamId = id;
@@ -272,26 +306,7 @@ export function installFakeBackend(cluster: FakeCluster = defaultCluster()): Fak
     cmdPortforwardStart: (_namespace, _name, port) => ({ session: `pf-${++sessionSeq}`, local_port: 40000 + port }),
     cmdPortforwardStop: () => null,
 
-    cmdGetResourceDetail: (resource, namespace, name) => {
-      const { kind, row } = findRow(resource, namespace, name);
-      const r = kind.resource;
-      return {
-        name,
-        namespace,
-        uid: `uid-${row.key}`,
-        api_version: r.group ? `${r.group}/${r.version}` : r.version,
-        kind: r.kind,
-        created: row.created,
-        age: "1h",
-        labels: {},
-        annotations: {},
-        finalizers: [],
-        owners: [],
-        conditions: [],
-        secret_keys: r.kind === "Secret" ? [{ key: "password", bytes: 7 }] : [],
-        events: [],
-      };
-    },
+    cmdGetResourceDetail: (resource, namespace, name) => detailOf(resource, namespace, name),
     cmdGetResourceYaml: (resource, namespace, name, reveal) => {
       const { kind, row } = findRow(resource, namespace, name);
       const key = `${kind.id}|${row.key}`;
@@ -392,6 +407,9 @@ export function installFakeBackend(cluster: FakeCluster = defaultCluster()): Fak
         deleted: b.deleted ?? [],
       }),
     emitWatchState: (s) => events.watchState.emit({ ...s, id: s.id ?? api.lastWatchId() ?? "" }),
+    lastDetailWatchId: () => (detailSeq ? `detail-${detailSeq}` : null),
+    activeDetailWatches: () => [...detailWatches.keys()],
+    emitDetail: (s) => events.detailWatch.emit({ ...s, id: s.id ?? api.lastDetailWatchId() ?? "" }),
     emitLogLines: (lines, id) => events.podLog.emit({ streamId: id ?? streamId ?? -1, data: lines }),
     emitLogEnd: async (error, done = true, id) => {
       const sid = id ?? streamId ?? -1;

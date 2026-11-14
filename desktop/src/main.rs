@@ -18,7 +18,6 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::cluster::cmd_list_namespaces,
             commands::cluster::cmd_discover,
             commands::cluster::cmd_check_access,
-            commands::resources::cmd_get_pod_details,
             commands::logs::cmd_stream_pod_logs,
             commands::logs::cmd_stop_pod_logs,
             commands::logs::cmd_stream_workload_logs,
@@ -29,6 +28,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::cluster::cmd_get_metrics,
             commands::watch::cmd_watch_start,
             commands::watch::cmd_watch_stop,
+            commands::watch::cmd_detail_watch,
             commands::cluster::cmd_list_contexts,
             commands::cluster::cmd_set_context,
             commands::exec::cmd_exec_start,
@@ -50,6 +50,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
         .events(collect_events![
             commands::watch::WatchBatch,
             commands::watch::WatchStateChanged,
+            commands::watch::DetailWatchEvent,
             commands::logs::PodLog,
             commands::logs::PodLogError,
             commands::logs::PodLogDone,
