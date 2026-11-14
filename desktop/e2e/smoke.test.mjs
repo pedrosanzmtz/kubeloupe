@@ -32,9 +32,10 @@ describe("kubeloupe on WebKitGTK against kind", { timeout: 15 * 60_000 }, () => 
   });
 
   it("starts connected, with non-zero Overview cards", { timeout: TEST_TIMEOUT }, async () => {
-    await app.waitFor(async () => (await app.statusText()) === "Connected", {
+    // The overview is watched, like the tables: "Live" once it has its lists.
+    await app.waitFor(async () => (await app.statusText()) === "Live", {
       timeout: 60_000,
-      message: 'header status "Connected"',
+      message: 'header status "Live"',
     });
     const cards = await app.waitFor(
       async () => {
@@ -49,6 +50,15 @@ describe("kubeloupe on WebKitGTK against kind", { timeout: 15 * 60_000 }, () => 
     assert.ok(Number(cards["Namespaces"]) > 0, `Namespaces card: ${cards["Namespaces"]}`);
     assert.ok(Number(cards["Pods"]) > 0, `Pods card: ${cards["Pods"]}`);
     assert.match(cards["Nodes ready"] ?? "", /^[1-9]\d*\/[1-9]\d*$/);
+    // The crash-looping demo pod is a problem pod, not counted as Running.
+    await app.waitFor(
+      async () =>
+        (await app.js(
+          `return Array.from(document.querySelectorAll('[aria-label="Problem pods"] .problem'), (p) => p.textContent)
+             .some((t) => t.includes("demo/crashed"));`,
+        )) || null,
+      { message: "demo/crashed in the problem pods" },
+    );
   });
 
   it("lists the demo pods and goes Live", { timeout: TEST_TIMEOUT }, async () => {
