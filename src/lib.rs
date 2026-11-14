@@ -908,7 +908,7 @@ pub async fn apply_pod_yaml(
     namespace: &str,
     name: &str,
     yaml: &str,
-) -> Result<()> {
+) -> Result<Vec<resources::FieldTakeover>> {
     resources::apply_resource_yaml(client, &pod_ref(), namespace, name, yaml).await
 }
 

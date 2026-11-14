@@ -695,6 +695,49 @@ async fn generic_yaml_can_be_saved_twice_in_a_row() -> Result<()> {
 
 #[tokio::test]
 #[ignore]
+async fn yaml_apply_reports_fields_taken_over() -> Result<()> {
+    in_temp_ns("kl-it-takeover", |client, ns| async move {
+        let kind = kind_named(&client, "configmaps").await?;
+        let r = &kind.resource;
+
+        // Another tool creates the object (like `kubectl create` would).
+        let cms: Api<k8s_openapi::api::core::v1::ConfigMap> = Api::namespaced(client.clone(), &ns);
+        let cm: k8s_openapi::api::core::v1::ConfigMap =
+            serde_json::from_value(serde_json::json!({
+                "apiVersion": "v1", "kind": "ConfigMap",
+                "metadata": { "name": "cm" }, "data": { "a": "1", "b": "1" }
+            }))?;
+        let pp = PostParams {
+            field_manager: Some("other-tool".into()),
+            ..PostParams::default()
+        };
+        cms.create(&pp, &cm).await?;
+
+        // Editing a field it owns still saves (forced), and says so.
+        let yaml = get_resource_yaml(&client, r, &ns, "cm", false).await?;
+        let edited = yaml
+            .replace("a: '1'", "a: '2'")
+            .replace("a: \"1\"", "a: \"2\"");
+        ensure!(edited != yaml, "edit did not apply to: {yaml}");
+        let took = apply_resource_yaml(&client, r, &ns, "cm", &edited).await?;
+        ensure!(
+            took.iter()
+                .any(|t| t.manager == "other-tool" && t.fields.iter().any(|f| f == ".data.a")),
+            "expected .data.a from other-tool, got {took:?}"
+        );
+        let now = cms.get("cm").await?;
+        ensure!(now.data.unwrap_or_default().get("a").map(String::as_str) == Some("2"));
+
+        // kubeloupe owns those fields now: saving again takes nothing over.
+        let took = apply_resource_yaml(&client, r, &ns, "cm", &edited).await?;
+        ensure!(took.is_empty(), "second save took over {took:?}");
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+#[ignore]
 async fn secret_values_are_hidden_until_revealed() -> Result<()> {
     in_temp_ns("kl-it-secret", |client, ns| async move {
         let kind = kind_named(&client, "secrets").await?;

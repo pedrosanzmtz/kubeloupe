@@ -872,7 +872,7 @@ async fn cmd_apply_resource_yaml(
     namespace: String,
     name: String,
     yaml: String,
-) -> Result<(), String> {
+) -> Result<Vec<resources::FieldTakeover>, String> {
     let client = client(&state).await?;
     resources::apply_resource_yaml(&client, &resource, &namespace, &name, &yaml)
         .await
