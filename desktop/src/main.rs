@@ -42,6 +42,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::resources::cmd_get_resource_yaml,
             commands::resources::cmd_apply_resource_yaml,
             commands::resources::cmd_delete_resource,
+            commands::resources::cmd_apply_manifests,
             commands::actions::cmd_run_action,
             commands::actions::cmd_bulk_delete,
             commands::actions::cmd_drain_node,

@@ -11,20 +11,24 @@
 //! - `jsonpath`: the small JSONPath the columns are written in
 //! - `discovery`: API discovery, access checks, resolving a kind by name
 //! - `ops`: list / get / YAML get and apply / delete
+//! - `manifests`, `apply`: create or update objects from a manifest file
 //! - `detail`: the detail panel for any kind
 //! - `pod_detail`: the pod section of the detail panel (containers, probes, ...)
 //! - `detail_watch`: live updates of one object's detail
 //! - `table`: `kubectl get`-style table output for the CLI
 
+mod apply;
 mod columns;
 mod detail;
 mod detail_watch;
 mod discovery;
 mod jsonpath;
+mod manifests;
 mod ops;
 mod pod_detail;
 mod table;
 
+pub use apply::{apply_manifests, cli_apply, ApplyResult, ApplyStatus, ManifestOptions};
 pub use columns::make_row;
 pub use detail::{detail_of, get_resource_detail, summarize_events};
 pub use detail_watch::{run_detail_watch, DetailState, DETAIL_FLUSH};

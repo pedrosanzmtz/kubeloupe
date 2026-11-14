@@ -48,6 +48,8 @@ export interface FakeCluster {
   resourceVersions: Record<string, number>;
   /** `cmd_bulk_delete` fails these row keys with the given reason. */
   bulkErrors: Record<string, string>;
+  /** `cmd_apply_manifests` rejects objects with these names (dry run included), with the given reason. */
+  applyErrors: Record<string, string>;
   overview: Overview_Serialize;
   metrics: MetricsSnapshot;
 }
@@ -225,6 +227,7 @@ export function defaultCluster(): FakeCluster {
     nextTakeovers: [],
     resourceVersions: {},
     bulkErrors: {},
+    applyErrors: {},
     overview: {
       namespaces: 3,
       nodes: { total: 2, ready: 2 },

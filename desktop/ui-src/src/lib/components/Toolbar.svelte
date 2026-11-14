@@ -1,5 +1,6 @@
 <script lang="ts">
   import { app, currentKind, switchNamespace } from "../stores/app.svelte";
+  import { openCreate } from "../stores/create.svelte";
 
   // Only namespaced kinds can be narrowed to a namespace.
   const namespaced = $derived(currentKind()?.resource.namespaced ?? false);
@@ -44,6 +45,9 @@
     aria-label="Filter"
     bind:value={app.search}
   />
+  <button type="button" class="btn primary create" title="Create resources from YAML" onclick={openCreate}
+    >+ Create</button
+  >
 </div>
 
 <style>
@@ -62,5 +66,8 @@
   }
   .namespace {
     width: 200px;
+  }
+  .create {
+    margin-left: auto;
   }
 </style>
