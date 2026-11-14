@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { commands } from "../bindings";
+  import type { FieldTakeover } from "../bindings";
   import type { Target } from "../stores/detail.svelte";
 
   let { target }: { target: Target } = $props();
@@ -34,12 +35,22 @@
     }
   }
 
+  /** Fields the last save took over from other field managers. */
+  let takeovers = $state.raw<FieldTakeover[]>([]);
+
   async function save() {
     status = "Saving…";
+    takeovers = [];
     try {
-      await commands.cmdApplyResourceYaml(target.resource, target.namespace, target.name, text);
+      const took = await commands.cmdApplyResourceYaml(
+        target.resource,
+        target.namespace,
+        target.name,
+        text,
+      );
       // Reload so the editor shows what the server now holds.
       await load();
+      takeovers = took;
       status = "Saved.";
     } catch (e) {
       status = "Could not save YAML: " + e;
@@ -82,6 +93,20 @@
 <p class="detail-status muted">
   {status}{#if locked && !status}Values are hidden. Reveal them to edit this Secret.{/if}
 </p>
+{#if takeovers.length > 0}
+  <div class="takeover" role="note">
+    This save took over fields another tool was managing. That tool may change them back the
+    next time it runs.
+    <ul>
+      {#each takeovers as t (t.manager)}
+        <li>
+          from <strong>{t.manager}</strong>:
+          {#each t.fields as f, i (f)}<code>{f}</code>{i < t.fields.length - 1 ? ", " : ""}{/each}
+        </li>
+      {/each}
+    </ul>
+  </div>
+{/if}
 
 <style>
   textarea {
@@ -98,6 +123,21 @@
     line-height: 1.5;
     resize: vertical;
     outline: none;
+  }
+  .takeover {
+    margin: 0 16px 12px;
+    padding: 8px 10px;
+    border: 1px solid var(--amber);
+    border-radius: 4px;
+    font-size: 12px;
+  }
+  .takeover ul {
+    margin: 6px 0 0;
+    padding-left: 18px;
+  }
+  .takeover code {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    word-break: break-all;
   }
   .btn:disabled {
     opacity: 0.4;

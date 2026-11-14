@@ -1522,21 +1522,35 @@ fn strip_server_fields(value: &mut Value) {
     }
 }
 
+/// Fields an apply took over from another field manager.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+pub struct FieldTakeover {
+    /// The manager that owned the fields (e.g. "kubectl-create", "helm").
+    pub manager: String,
+    /// Field paths, as the API server reports them (e.g. ".spec.replicas").
+    pub fields: Vec<String>,
+}
+
 /// Apply edited YAML with server-side apply (field manager "kubeloupe").
 ///
 /// Server-managed fields are stripped first (see [`strip_server_fields`]),
 /// so saving the same editor content again, or content that was loaded
-/// before an earlier save, never fails on a stale `resourceVersion`. The
-/// apply is forced: the document is an explicit edit by the user, and it
-/// should win over fields another manager (kubectl, a controller) last set
-/// instead of failing with a field-ownership conflict.
+/// before an earlier save, never fails on a stale `resourceVersion`.
+///
+/// The apply is forced, like `kubectl edit`: the document is an explicit
+/// edit by the user and wins over fields another manager (kubectl, Helm, a
+/// controller) owns. Without force, the first edit of almost any object
+/// created by kubectl would fail. So the takeover is not silent, a
+/// non-forced dry run runs first, and the fields it reports as conflicting
+/// are returned: those are the fields this save took over.
 pub async fn apply_resource_yaml(
     client: &Client,
     r: &ResourceRef,
     namespace: &str,
     name: &str,
     yaml: &str,
-) -> Result<()> {
+) -> Result<Vec<FieldTakeover>> {
     let mut value: Value = serde_yaml::from_str(yaml).context("invalid YAML")?;
     if !value.is_object() {
         bail!("the YAML must be a single Kubernetes object");
@@ -1559,13 +1573,62 @@ pub async fn apply_resource_yaml(
         bail!("metadata.name must stay \"{name}\" (rename is not supported)");
     }
     let api = object_api(client, r, namespace)?;
-    api.patch(
-        name,
-        &PatchParams::apply(FIELD_MANAGER).force(),
-        &Patch::Apply(&value),
-    )
-    .await?;
-    Ok(())
+    let patch = Patch::Apply(&value);
+    let takeovers = match api
+        .patch(name, &PatchParams::apply(FIELD_MANAGER).dry_run(), &patch)
+        .await
+    {
+        Ok(_) => Vec::new(),
+        Err(kube::Error::Api(e)) if e.code == 409 => parse_apply_conflicts(&e.message),
+        Err(e) => return Err(e.into()),
+    };
+    api.patch(name, &PatchParams::apply(FIELD_MANAGER).force(), &patch)
+        .await?;
+    Ok(takeovers)
+}
+
+/// Parse the field-ownership conflicts out of a server-side apply 409
+/// message. The API server reports one conflict as
+/// `conflict with "mgr" using v1: .data.a`, and several as blocks of
+/// `conflicts with "mgr" using apps/v1:` followed by `- .path` lines.
+fn parse_apply_conflicts(message: &str) -> Vec<FieldTakeover> {
+    let mut out: Vec<FieldTakeover> = Vec::new();
+    let mut rest = message;
+    while let Some(start) = rest.find(" with \"") {
+        let after = &rest[start + " with \"".len()..];
+        let Some(end) = after.find('"') else { break };
+        let manager = after[..end].to_string();
+        let body = &after[end + 1..];
+        // The block runs until the next manager's block.
+        let next = body
+            .find("conflict with \"")
+            .or_else(|| body.find("conflicts with \""));
+        let block = &body[..next.unwrap_or(body.len())];
+        let Some(colon) = block.find(':') else { break };
+        let paths = &block[colon + 1..];
+        let mut fields: Vec<String> = paths
+            .lines()
+            .map(|l| l.trim().trim_start_matches("- ").trim())
+            .filter(|l| l.starts_with('.'))
+            .map(str::to_string)
+            .collect();
+        fields.dedup();
+        if !fields.is_empty() {
+            match out.iter_mut().find(|t| t.manager == manager) {
+                Some(t) => t.fields.extend(fields),
+                None => out.push(FieldTakeover { manager, fields }),
+            }
+        }
+        rest = &body[next.unwrap_or(body.len())..];
+    }
+    if out.is_empty() {
+        // Unknown format: still say that something was taken over.
+        out.push(FieldTakeover {
+            manager: "another field manager".into(),
+            fields: vec![message.trim().to_string()],
+        });
+    }
+    out
 }
 
 pub async fn delete_resource(
@@ -1774,6 +1837,45 @@ pub fn render_table(kind: &ResourceKind, rows: &[ResourceRow]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn apply_conflicts_single() {
+        let msg = r#"Apply failed with 1 conflict: conflict with "kubectl-create" using apps/v1: .spec.replicas"#;
+        assert_eq!(
+            super::parse_apply_conflicts(msg),
+            vec![super::FieldTakeover {
+                manager: "kubectl-create".into(),
+                fields: vec![".spec.replicas".into()],
+            }]
+        );
+    }
+
+    #[test]
+    fn apply_conflicts_multiple_managers() {
+        let msg = "Apply failed with 3 conflicts: conflicts with \"helm\" using apps/v1:\n\
+                   - .spec.replicas\n\
+                   - .spec.template.spec.containers[name=\"web\"].image\n\
+                   conflict with \"kubectl-edit\" using apps/v1: .metadata.labels.app";
+        let got = super::parse_apply_conflicts(msg);
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].manager, "helm");
+        assert_eq!(
+            got[0].fields,
+            vec![
+                ".spec.replicas".to_string(),
+                ".spec.template.spec.containers[name=\"web\"].image".to_string()
+            ]
+        );
+        assert_eq!(got[1].manager, "kubectl-edit");
+        assert_eq!(got[1].fields, vec![".metadata.labels.app".to_string()]);
+    }
+
+    #[test]
+    fn apply_conflicts_unknown_format() {
+        let got = super::parse_apply_conflicts("something else went wrong");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].fields, vec!["something else went wrong".to_string()]);
+    }
+
     use super::*;
     use serde_json::json;
 
