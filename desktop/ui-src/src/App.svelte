@@ -15,6 +15,11 @@
   import DetailPanel from "./lib/components/DetailPanel.svelte";
   import GenericDetail from "./lib/components/GenericDetail.svelte";
   import Dock from "./lib/components/Dock.svelte";
+  import HelmView from "./lib/components/helm/HelmView.svelte";
+  import HelmDetail from "./lib/components/helm/HelmDetail.svelte";
+  import HelmConfirm from "./lib/components/helm/HelmConfirm.svelte";
+  import { helm } from "./lib/stores/helm.svelte";
+  import { HELM_VIEW } from "./lib/helm";
   import { dock } from "./lib/stores/dock.svelte";
   import { isPod } from "./lib/columns";
   import {
@@ -79,6 +84,8 @@
     <ActionNotice />
     {#if app.view === "overview"}
       <Overview />
+    {:else if app.view === HELM_VIEW}
+      <HelmView />
     {:else if kind}
       {#key kind.id}
         <TableView {kind} />
@@ -95,10 +102,16 @@
       {/if}
     {/key}
   {/if}
+  {#if app.view === HELM_VIEW && helm.selected}
+    {#key `${helm.selected.namespace}/${helm.selected.name}`}
+      <HelmDetail target={helm.selected} />
+    {/key}
+  {/if}
 </div>
 <Dock />
 <Footer />
 <ActionDialog />
+<HelmConfirm />
 {#if createUi.open}
   <CreateDialog />
 {/if}

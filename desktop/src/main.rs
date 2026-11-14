@@ -47,7 +47,13 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::actions::cmd_run_action,
             commands::actions::cmd_bulk_delete,
             commands::actions::cmd_drain_node,
-            commands::actions::cmd_cancel_drain
+            commands::actions::cmd_cancel_drain,
+            commands::helm::cmd_helm_list,
+            commands::helm::cmd_helm_charts,
+            commands::helm::cmd_helm_get,
+            commands::helm::cmd_helm_version,
+            commands::helm::cmd_helm_rollback,
+            commands::helm::cmd_helm_uninstall
         ])
         .events(collect_events![
             commands::watch::WatchBatch,

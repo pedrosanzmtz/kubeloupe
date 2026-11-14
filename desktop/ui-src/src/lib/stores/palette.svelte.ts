@@ -4,6 +4,7 @@
 
 import { replicasFromRow, targetLabel } from "../actions";
 import type { PaletteItem } from "../palette";
+import { HELM_VIEW } from "../helm";
 import { pushRecent } from "../palette";
 import { app, canOpenDenied, kinds, refresh, setView, switchContext, switchNamespace } from "./app.svelte";
 import { requestAction } from "./actions.svelte";
@@ -29,6 +30,7 @@ export function paletteItems(): PaletteItem[] {
   const items: PaletteItem[] = [
     { id: "cmd:create", group: "Command", label: "Create resource…", terms: ["new", "apply", "yaml"], run: openCreate },
     { id: "cmd:overview", group: "Command", label: "Go to Overview", run: () => setView("overview") },
+    { id: "cmd:helm", group: "Command", label: "Go to Helm releases", terms: ["charts"], run: () => setView(HELM_VIEW) },
     { id: "cmd:refresh", group: "Command", label: "Refresh", terms: ["reload"], run: refresh },
     { id: "cmd:help", group: "Command", label: "Keyboard shortcuts", terms: ["help", "keys"], run: openHelp },
   ];

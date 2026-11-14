@@ -1,0 +1,6 @@
+apiVersion: v2
+name: demo-chart
+description: A tiny local chart for kubeloupe's Helm tests (no repository needed).
+type: application
+version: 0.1.0
+appVersion: "1.36"

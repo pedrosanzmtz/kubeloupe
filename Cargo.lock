@@ -2194,9 +2194,11 @@ name = "kubeloupe"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "chrono",
  "clap",
  "clap_complete",
+ "flate2",
  "futures",
  "k8s-openapi",
  "kube",

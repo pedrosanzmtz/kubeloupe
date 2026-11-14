@@ -2,9 +2,10 @@
   import { app, currentKind } from "../stores/app.svelte";
   import NamespacePicker from "./NamespacePicker.svelte";
   import { openCreate } from "../stores/create.svelte";
+  import { HELM_VIEW } from "../helm";
 
-  // Only namespaced kinds can be narrowed to a namespace.
-  const namespaced = $derived(currentKind()?.resource.namespaced ?? false);
+  // Only namespaced kinds (and Helm releases) can be narrowed to a namespace.
+  const namespaced = $derived(app.view === HELM_VIEW || (currentKind()?.resource.namespaced ?? false));
 </script>
 
 <div class="toolbar">

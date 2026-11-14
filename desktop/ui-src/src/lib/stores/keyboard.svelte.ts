@@ -8,6 +8,7 @@ import type { ActionTarget } from "../actions";
 import type { Row } from "../columns";
 import { bindingFor, inEditorOrTerminal, isActivatable, isMacPlatform, isTextEntry } from "../keys";
 import { actionUi } from "./actions.svelte";
+import { helm, selectRelease } from "./helm.svelte";
 import { createUi } from "./create.svelte";
 import { closeDetail, detail } from "./detail.svelte";
 import { toggleDock } from "./dock.svelte";
@@ -86,7 +87,7 @@ export function closeHelp() {
 
 /** A menu or a dialog has the keyboard (each handles its own Esc). */
 function modalOpen(): boolean {
-  return keyboard.menus > 0 || actionUi.request !== null || createUi.open || unsaved.asking;
+  return keyboard.menus > 0 || actionUi.request !== null || helm.request !== null || createUi.open || unsaved.asking;
 }
 
 const mac = isMacPlatform();
@@ -122,6 +123,7 @@ export function handleKey(e: KeyboardEvent) {
       return done(e, openHelp);
     case "escape":
       if (detail.target) done(e, closeDetail);
+      else if (helm.selected) done(e, () => selectRelease(null));
       return;
     case "focusFilter": {
       const filter = document.getElementById("table-filter");

@@ -19,6 +19,8 @@ import type {
 } from "../../lib/bindings";
 import { DISCOVERED } from "./discover";
 import { relatedFixtures } from "./related";
+import { defaultHelm } from "./helm";
+import type { FakeHelm } from "./helm";
 
 export interface FakeCluster {
   contexts: ContextInfo_Serialize[];
@@ -58,6 +60,8 @@ export interface FakeCluster {
   applyErrors: Record<string, string>;
   overview: Overview_Serialize;
   metrics: MetricsSnapshot;
+  /** Helm releases (`cmd_helm_*`). */
+  helm: FakeHelm;
 }
 
 /** Unix seconds, a fixed distance in the past so ages are stable. */
@@ -325,6 +329,7 @@ export function defaultCluster(): FakeCluster {
         },
       ],
     },
+    helm: defaultHelm(),
   };
 }
 
