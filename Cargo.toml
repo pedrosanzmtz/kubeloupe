@@ -14,6 +14,7 @@ repository = "https://github.com/pedrosanzmtz/kubeloupe"
 anyhow = "1"
 chrono = "0.4"
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
 futures = "0.3"
 k8s-openapi = { version = "0.26", features = ["latest"] }
 kube = { version = "2", features = ["runtime", "http-proxy", "ws", "oidc", "gzip"] }
@@ -29,6 +30,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # `specta::Type` derives on the IPC structs, used by the desktop app to
 # generate TypeScript bindings. The CLI does not enable it.
 specta = ["dep:specta"]
+
+[target.'cfg(unix)'.dependencies]
+# Restore the default SIGPIPE action in the CLI (`kubeloupe get pods | head`).
+libc = "0.2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }

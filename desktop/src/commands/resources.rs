@@ -75,3 +75,30 @@ pub(crate) async fn cmd_delete_resource(
         .await
         .map_err(|e| actions::describe_error(&e))
 }
+
+/// Create or update the objects of a (multi-document) YAML manifest. The
+/// batch is validated with a dry run first; unless `dry_run`, it is applied
+/// if every document passed, or with `skip_invalid` the ones that did.
+/// Objects without a namespace go to `namespace` ("" = "default").
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn cmd_apply_manifests(
+    state: State<'_, AppState>,
+    yaml: String,
+    namespace: String,
+    dry_run: bool,
+    skip_invalid: bool,
+) -> Result<Vec<resources::ApplyResult>, String> {
+    let client = client(&state).await?;
+    let mut kinds = state.kinds.lock().unwrap().clone();
+    if kinds.is_empty() {
+        kinds = resources::discover(&client)
+            .await
+            .map_err(|e| actions::describe_error(&e))?;
+    }
+    let opts = resources::ManifestOptions {
+        dry_run,
+        skip_invalid,
+    };
+    Ok(resources::apply_manifests(&client, &kinds, &yaml, &namespace, opts).await)
+}

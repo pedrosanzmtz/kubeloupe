@@ -11,33 +11,38 @@
 //! - `jsonpath`: the small JSONPath the columns are written in
 //! - `discovery`: API discovery, access checks, resolving a kind by name
 //! - `ops`: list / get / YAML get and apply / delete
+//! - `manifests`, `apply`: create or update objects from a manifest file
 //! - `detail`: the detail panel for any kind
 //! - `pod_detail`: the pod section of the detail panel (containers, probes, ...)
 //! - `detail_watch`: live updates of one object's detail
 //! - `table`: `kubectl get`-style table output for the CLI
 
+mod apply;
 mod columns;
 mod detail;
 mod detail_watch;
 mod discovery;
 mod jsonpath;
+mod manifests;
 mod ops;
 mod pod_detail;
 mod table;
 
+pub use apply::{apply_manifests, cli_apply, ApplyResult, ApplyStatus, ManifestOptions};
 pub use columns::make_row;
 pub use detail::{detail_of, get_resource_detail, summarize_events};
 pub use detail_watch::{run_detail_watch, DetailState, DETAIL_FLUSH};
 pub use discovery::{can_list, check_access, discover, resolve_kind};
 pub use ops::{
     apply_resource_yaml, apply_resource_yaml_with, delete_resource, dyn_api, get_resource,
-    get_resource_yaml, list_resources, ApplyOptions, ApplyOutcome, FieldTakeover,
+    get_resource_yaml, list_resources, object_value, to_yaml, ApplyOptions, ApplyOutcome,
+    FieldTakeover,
 };
 pub use pod_detail::{
     env_refs, pod_extras, probe_summary, state_info, ContainerDetail, ContainerKind, EnvInfo,
     MountInfo, PodExtras, PortInfo, ProbeInfo, StateInfo,
 };
-pub use table::render_table;
+pub use table::{align_columns, render_table, table_cells, table_header};
 
 use columns::Source;
 use kube::api::ApiResource;
