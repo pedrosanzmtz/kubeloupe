@@ -1,8 +1,14 @@
 <script lang="ts">
   import { app, refresh, switchContext } from "../stores/app.svelte";
   import { live } from "../stores/live.svelte";
+  import { confirmDiscard } from "../stores/unsaved.svelte";
 
-  function onContextChange(name: string) {
+  async function onContextChange(select: HTMLSelectElement) {
+    const name = select.value;
+    if (!(await confirmDiscard())) {
+      select.value = current;
+      return;
+    }
     // The backend drops its watches on a context switch; stop ours first.
     live.stop();
     return switchContext(name);
@@ -27,7 +33,7 @@
     class:invisible={app.contexts.length <= 1}
     aria-label="Cluster context"
     value={current}
-    onchange={(e) => onContextChange(e.currentTarget.value)}
+    onchange={(e) => onContextChange(e.currentTarget)}
   >
     {#each app.contexts as ctx (ctx.name)}
       <option value={ctx.name}>{ctx.name}</option>

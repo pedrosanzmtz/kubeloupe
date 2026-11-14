@@ -59,7 +59,12 @@ export const commands = {
 	cmdGetResourceDetail: (resource: ResourceRef, namespace: string, name: string, options?: InvokeOptions) => __TAURI_INVOKE<ResourceDetail>("cmd_get_resource_detail", { resource, namespace, name }, options),
 	/**  An object as YAML. Secret values stay hidden unless `reveal` is set. */
 	cmdGetResourceYaml: (resource: ResourceRef, namespace: string, name: string, reveal: boolean, options?: InvokeOptions) => __TAURI_INVOKE<string>("cmd_get_resource_yaml", { resource, namespace, name, reveal }, options),
-	cmdApplyResourceYaml: (resource: ResourceRef, namespace: string, name: string, yaml: string, options?: InvokeOptions) => __TAURI_INVOKE<FieldTakeover[]>("cmd_apply_resource_yaml", { resource, namespace, name, yaml }, options),
+	/**
+	 *  Server-side apply of edited YAML. `resource_version` is the version the
+	 *  YAML was loaded at (empty: don't check); if the object changed since,
+	 *  nothing is applied and the outcome says so. `dry_run` validates only.
+	 */
+	cmdApplyResourceYaml: (resource: ResourceRef, namespace: string, name: string, yaml: string, resourceVersion: string, dryRun: boolean, options?: InvokeOptions) => __TAURI_INVOKE<ApplyOutcome>("cmd_apply_resource_yaml", { resource, namespace, name, yaml, resourceVersion, dryRun }, options),
 	cmdDeleteResource: (resource: ResourceRef, namespace: string, name: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_delete_resource", { resource, namespace, name }, options),
 	/**
 	 *  Run one action (everything except drain) on one object. Returns a short
@@ -128,6 +133,19 @@ export type ActionInput =
 "none" | 
 /**  A non-negative whole number of replicas. */
 "replicas";
+
+/**  What an apply did. */
+export type ApplyOutcome = 
+/**
+ *  Applied (or, for a dry run, would apply). `takeovers` are the fields
+ *  it took (or would take) over from other field managers.
+ */
+{ outcome: "applied"; takeovers: FieldTakeover[] } | 
+/**
+ *  Someone else wrote to the object since it was loaded; nothing was
+ *  applied. `resource_version` is the object's current one.
+ */
+{ outcome: "conflict"; resource_version: string };
 
 /**  Outcome of one object in a bulk delete. */
 export type BulkItemResult = {

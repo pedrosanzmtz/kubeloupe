@@ -1,6 +1,7 @@
 import { commands } from "../bindings";
 import type { ContextInfo, NamespaceInfo, ResourceKind } from "../bindings";
 import { closeDetail, openDetail } from "./detail.svelte";
+import { whenDiscarded } from "./unsaved.svelte";
 
 /** `"overview"`, or the id of a discovered kind (`apps/v1/deployments`). */
 export type View = string;
@@ -80,8 +81,10 @@ export async function loadKinds() {
 
 /** Open an object in its own kind's view (owner links, related objects). */
 export function openObject(kind: ResourceKind, namespace: string, name: string) {
-  setView(kind.id);
-  openDetail({ resource: kind.resource, namespace, name });
+  whenDiscarded(() => {
+    setView(kind.id);
+    openDetail({ resource: kind.resource, namespace, name });
+  });
 }
 
 export function setStatus(ok: boolean | null, text: string) {
@@ -114,12 +117,15 @@ export async function loadNamespaces() {
   }
 }
 
+/** Asks first if the detail panel has unsaved edits. */
 export function setView(view: View) {
-  closeDetail();
-  app.view = view;
-  app.count = "";
-  app.updated = "";
-  showError("");
+  whenDiscarded(() => {
+    closeDetail();
+    app.view = view;
+    app.count = "";
+    app.updated = "";
+    showError("");
+  });
 }
 
 export function refresh() {

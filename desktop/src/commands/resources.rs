@@ -49,19 +49,30 @@ pub(crate) async fn cmd_get_resource_yaml(
         .map_err(|e| e.to_string())
 }
 
+/// Server-side apply of edited YAML. `resource_version` is the version the
+/// YAML was loaded at (empty: don't check); if the object changed since,
+/// nothing is applied and the outcome says so. `dry_run` validates only.
 #[tauri::command]
 #[specta::specta]
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn cmd_apply_resource_yaml(
     state: State<'_, AppState>,
     resource: ResourceRef,
     namespace: String,
     name: String,
     yaml: String,
-) -> Result<Vec<resources::FieldTakeover>, String> {
+    resource_version: String,
+    dry_run: bool,
+) -> Result<resources::ApplyOutcome, String> {
     let client = client(&state).await?;
-    resources::apply_resource_yaml(&client, &resource, &namespace, &name, &yaml)
+    let opts = resources::ApplyOptions {
+        dry_run,
+        resource_version: Some(resource_version).filter(|v| !v.is_empty()),
+    };
+    resources::apply_resource_yaml_with(&client, &resource, &namespace, &name, &yaml, &opts)
         .await
-        .map_err(|e| e.to_string())
+        // `:#` keeps the cause, e.g. the YAML parser's line and column.
+        .map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]

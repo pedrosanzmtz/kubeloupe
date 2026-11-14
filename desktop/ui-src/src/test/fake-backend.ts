@@ -127,6 +127,13 @@ export function installFakeBackend(cluster: FakeCluster = defaultCluster()): Fak
     return lines.join("\n") + "\n";
   }
 
+  /** Set `metadata.resourceVersion` the way the server reports it (after name / namespace). */
+  function withResourceVersion(yaml: string, rv: number): string {
+    const line = `  resourceVersion: "${rv}"\n`;
+    if (/^ {2}resourceVersion: .*\n/m.test(yaml)) return yaml.replace(/^ {2}resourceVersion: .*\n/m, line);
+    return yaml.replace(/^(metadata:\n {2}name: .*\n(?: {2}namespace: .*\n)?)/m, `$1${line}`);
+  }
+
   const HANDLERS: Handlers = {
     cmdListContexts: () => cluster.contexts,
     cmdSetContext: (name) => {
@@ -209,15 +216,23 @@ export function installFakeBackend(cluster: FakeCluster = defaultCluster()): Fak
     cmdGetResourceYaml: (resource, namespace, name, reveal) => {
       const { kind, row } = findRow(resource, namespace, name);
       const key = `${kind.id}|${row.key}`;
-      if (reveal && cluster.revealedYaml[key]) return cluster.revealedYaml[key];
-      return cluster.yaml[key] ?? defaultYaml(kind, row);
+      const yaml = (reveal && cluster.revealedYaml[key]) || cluster.yaml[key] || defaultYaml(kind, row);
+      return withResourceVersion(yaml, cluster.resourceVersions[key] ?? 1);
     },
-    cmdApplyResourceYaml: (resource, namespace, name, yaml) => {
+    cmdApplyResourceYaml: (resource, namespace, name, yaml, resourceVersion, dryRun) => {
       const { kind, row } = findRow(resource, namespace, name);
-      cluster.yaml[`${kind.id}|${row.key}`] = yaml;
+      const key = `${kind.id}|${row.key}`;
+      const current = String(cluster.resourceVersions[key] ?? 1);
+      if (resourceVersion && resourceVersion !== current) {
+        return { outcome: "conflict", resource_version: current };
+      }
+      // A dry run reports what the save would take over, without using it up.
+      if (dryRun) return { outcome: "applied", takeovers: cluster.nextTakeovers };
+      cluster.yaml[key] = yaml;
+      cluster.resourceVersions[key] = Number(current) + 1;
       const took = cluster.nextTakeovers;
       cluster.nextTakeovers = [];
-      return took;
+      return { outcome: "applied", takeovers: took };
     },
     cmdDeleteResource: (resource, namespace, name) => {
       const { kind, row } = findRow(resource, namespace, name);
