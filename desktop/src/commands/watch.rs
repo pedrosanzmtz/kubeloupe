@@ -20,6 +20,15 @@ pub(crate) struct WatchBatch {
     deleted: Vec<String>,
 }
 
+/// A new detail (or `deleted`, or a watch error) for the detail watch `id`.
+#[derive(Debug, Clone, Serialize, Type, Event)]
+#[tauri_specta(event_name = "detail-watch")]
+pub(crate) struct DetailWatchEvent {
+    id: String,
+    #[serde(flatten)]
+    state: resources::DetailState,
+}
+
 /// Payload of the `watch-state` event.
 #[derive(Debug, Clone, Serialize, Type, Event)]
 #[tauri_specta(event_name = "watch-state")]
@@ -93,6 +102,39 @@ pub(crate) async fn cmd_watch_start(
     Ok(id)
 }
 
+/// Watch one object for the detail panel. Returns the watch id carried by
+/// the `detail-watch` events; stop it with `cmd_watch_stop`.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn cmd_detail_watch(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    resource: ResourceRef,
+    namespace: String,
+    name: String,
+) -> Result<String, String> {
+    let client = client(&state).await?;
+    let id = next_session("detail");
+    let watch_id = id.clone();
+    let task = tauri::async_runtime::spawn(resources::run_detail_watch(
+        client,
+        resource,
+        namespace,
+        name,
+        resources::DETAIL_FLUSH,
+        move |state| {
+            let _ = DetailWatchEvent {
+                id: watch_id.clone(),
+                state,
+            }
+            .emit(&app);
+        },
+    ));
+    state.watches.lock().unwrap().insert(id.clone(), task);
+    Ok(id)
+}
+
+/// Stop a table watch or a detail watch.
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn cmd_watch_stop(state: State<'_, AppState>, id: String) -> Result<(), String> {
