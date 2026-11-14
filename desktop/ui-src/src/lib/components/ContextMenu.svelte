@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { onMount } from "svelte";
+  import { keyboard } from "../stores/keyboard.svelte";
+
   export interface MenuItem {
     label: string;
     danger?: boolean;
@@ -27,8 +30,33 @@
     top = Math.max(4, Math.min(y, window.innerHeight - h - 4));
   });
 
+  // While open, the menu has the keyboard: focus starts on the first item
+  // and goes back where it was (the table) when the menu closes.
+  onMount(() => {
+    const before = document.activeElement as HTMLElement | null;
+    keyboard.menus += 1;
+    el?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+    return () => {
+      keyboard.menus -= 1;
+      if (before?.isConnected) before.focus({ preventScroll: true });
+    };
+  });
+
   function onkeydown(e: KeyboardEvent) {
-    if (e.key === "Escape") onclose();
+    if (e.key === "Escape" || e.key === "Tab") {
+      e.preventDefault();
+      onclose();
+      return;
+    }
+    const all = [...(el?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])];
+    if (all.length === 0) return;
+    const at = all.indexOf(document.activeElement as HTMLElement);
+    const go = ({ ArrowDown: at + 1, ArrowUp: at - 1, Home: 0, End: all.length - 1 } as Record<string, number>)[
+      e.key
+    ];
+    if (go === undefined) return;
+    e.preventDefault();
+    all[(go + all.length) % all.length].focus();
   }
 </script>
 
@@ -42,6 +70,7 @@
     <button
       type="button"
       role="menuitem"
+      tabindex="-1"
       class:danger={item.danger}
       onclick={() => {
         onclose();
@@ -91,8 +120,10 @@
     font-size: 13px;
     cursor: pointer;
   }
-  button:hover {
+  button:hover,
+  button:focus-visible {
     background: var(--bg-hover);
+    outline: none;
   }
   button.danger {
     color: #f5a3a5;

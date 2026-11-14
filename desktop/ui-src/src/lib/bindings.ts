@@ -851,6 +851,7 @@ export type ResourceKind = {
 	/**  Defined by a CustomResourceDefinition. */
 	crd: boolean,
 	verbs: string[],
+	/**  Short names from discovery plus kubectl's aliases (`deploy`, `svc`). */
 	short_names: string[],
 	columns: ColumnDef[],
 	/**  What can be done to objects of this kind ([`crate::actions::actions_for`]). */
