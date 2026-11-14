@@ -7,7 +7,7 @@ test("a watch snapshot renders rows", async ({ page }) => {
 
   await expect(rows(page)).toHaveCount(5);
   expect(await column(page, "Name")).toEqual(["crashed", "db-0", "web-1", "web-2", "coredns-1"]);
-  await expect(row(page, "crashed").getByRole("cell", { name: "CrashLoopBackOff" })).toHaveClass(
+  await expect(row(page, "crashed").getByRole("gridcell", { name: "CrashLoopBackOff" })).toHaveClass(
     /phase-CrashLoopBackOff/,
   );
   await expect(page.getByText("5 of 5 items")).toBeVisible();
@@ -56,7 +56,7 @@ test("an incremental batch updates and deletes rows, keeping scroll and selectio
 
   await expect(page.getByText("199 of 199 items")).toBeVisible();
   await expect(row(page, "pod-101")).toHaveCount(0);
-  await expect(row(page, "pod-102").getByRole("cell", { name: "Terminating" })).toBeVisible();
+  await expect(row(page, "pod-102").getByRole("gridcell", { name: "Terminating" })).toBeVisible();
   // Rows above the viewport were deleted, yet the scroll offset is unchanged…
   expect(await scroller.evaluate((el) => el.scrollTop)).toBe(28 * 100);
   // …and the checked rows are still checked.

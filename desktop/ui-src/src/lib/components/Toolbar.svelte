@@ -12,6 +12,7 @@
     <NamespacePicker />
   </div>
   <input
+    id="table-filter"
     class="input search"
     type="search"
     placeholder="Filter…"

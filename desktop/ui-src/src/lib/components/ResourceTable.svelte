@@ -1,10 +1,13 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import VirtualList from "./VirtualList.svelte";
   import ContextMenu from "./ContextMenu.svelte";
   import type { MenuItem } from "./ContextMenu.svelte";
   import { replicasFromRow } from "../actions";
   import { rangeKeys } from "../selection";
   import { requestAction } from "../stores/actions.svelte";
+  import { registerTable } from "../stores/keyboard.svelte";
+  import type { RowMove } from "../stores/keyboard.svelte";
   import type { ResourceKind } from "../bindings";
   import { columnsFor } from "../columns";
   import type { Metrics, Row } from "../columns";
@@ -100,6 +103,11 @@
 
   function openMenu(e: MouseEvent, row: Row) {
     e.preventDefault();
+    focusedKey = row.key;
+    openMenuAt(e.clientX, e.clientY, row);
+  }
+
+  function openMenuAt(x: number, y: number, row: Row) {
     let items: MenuItem[];
     let title: string;
     if (selected.has(row.key) && selected.size > 1) {
@@ -117,8 +125,93 @@
           requestAction(kind, [{ namespace: row.namespace, name: row.name }], a, replicasFromRow(row, keys)),
       }));
     }
-    menu = items.length > 0 ? { x: e.clientX, y: e.clientY, title, items } : null;
+    menu = items.length > 0 ? { x, y, title, items } : null;
   }
+
+  // Keyboard focus: one row, by key, so it stays on the same object when
+  // watch batches reorder the table. Separate from the checkboxes.
+  let focusedKey = $state<string | null>(null);
+  let lastFocusedIndex = -1;
+  const focusedIndex = $derived(focusedKey === null ? -1 : visibleKeys.indexOf(focusedKey));
+  let gridEl = $state<HTMLDivElement | null>(null);
+  let list: VirtualList | undefined = $state();
+
+  // The focused row went away (deleted, filtered out): focus its neighbour.
+  $effect(() => {
+    if (focusedIndex >= 0) lastFocusedIndex = focusedIndex;
+    else if (focusedKey !== null) {
+      focusedKey = visibleKeys.length > 0 ? visibleKeys[Math.min(lastFocusedIndex, visibleKeys.length - 1)] : null;
+    }
+  });
+
+  function focusRow(index: number) {
+    const key = visibleKeys[index];
+    if (key === undefined) return;
+    focusedKey = key;
+    list?.scrollToIndex(index);
+    gridEl?.focus({ preventScroll: true });
+  }
+
+  function move(to: RowMove) {
+    const last = visible.length - 1;
+    if (last < 0) return;
+    // Start from the row in the detail panel when nothing has focus yet.
+    const from = focusedIndex >= 0 ? focusedIndex : selectedKey ? visibleKeys.indexOf(selectedKey) : -1;
+    const next = {
+      next: from < 0 ? 0 : Math.min(from + 1, last),
+      prev: from < 0 ? 0 : Math.max(from - 1, 0),
+      first: 0,
+      last,
+    }[to];
+    focusRow(next);
+  }
+
+  const focusedEntry = () => (focusedIndex >= 0 ? visible[focusedIndex] : undefined);
+
+  function menuForFocused() {
+    const entry = focusedEntry();
+    if (!entry) return;
+    list?.scrollToIndex(focusedIndex);
+    const rect = document.getElementById(rowId(focusedIndex))?.getBoundingClientRect();
+    openMenuAt(rect ? rect.left + 40 : 100, rect ? rect.bottom : 100, entry.row);
+  }
+
+  function deleteRows() {
+    if (!deleteAction) return;
+    if (selected.size > 0) return deleteSelected();
+    const entry = focusedEntry();
+    if (entry) requestAction(kind, [{ namespace: entry.row.namespace, name: entry.row.name }], deleteAction);
+  }
+
+  onMount(() =>
+    registerTable({
+      get kind() {
+        return kind;
+      },
+      move,
+      openFocused: () => {
+        const entry = focusedEntry();
+        if (entry) onselect?.(entry.row);
+      },
+      toggleFocused: () => {
+        if (focusedKey !== null && focusedIndex >= 0) toggleRow(focusedKey, false);
+      },
+      menuForFocused,
+      deleteRows,
+      rows: () => store.entries.map((e) => e.row),
+      actionTargets: () => {
+        if (selected.size > 0) return { targets: targetsOf(selected), row: null };
+        const entry = focusedEntry() ?? visible.find((e) => e.key === selectedKey);
+        return entry
+          ? { targets: [{ namespace: entry.row.namespace, name: entry.row.name }], row: entry.row }
+          : { targets: [], row: null };
+      },
+      focus: () => gridEl?.focus({ preventScroll: true }),
+    }),
+  );
+
+  /** DOM id of row `i`, for `aria-activedescendant`. */
+  const rowId = (i: number) => `resource-row-${i}`;
 
   function toggleSort(key: string) {
     if (sort?.key !== key) sort = { key, dir: "asc" };
@@ -127,7 +220,7 @@
   }
 </script>
 
-<div class="table" role="table" data-testid="resource-table">
+<div class="table" data-testid="resource-table">
   {#if selected.size > 0}
     <div class="bulk" role="toolbar" aria-label="Selection">
       <span>{selected.size} selected</span>
@@ -137,68 +230,89 @@
       <button type="button" class="btn" onclick={() => (selected = new Set())}>Clear</button>
     </div>
   {/if}
-  <div class="head" role="row" style:grid-template-columns={template}>
-    <div class="th check" role="columnheader">
-      <input
-        type="checkbox"
-        aria-label="Select all visible rows"
-        checked={allSelected}
-        indeterminate={someSelected}
-        onchange={toggleAll}
-      />
-    </div>
-    {#each columns as col (col.key)}
-      <button
-        type="button"
-        class="th"
-        role="columnheader"
-        aria-sort={sort?.key === col.key ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
-        onclick={() => toggleSort(col.key)}
-      >
-        {col.label}
-        {#if sort?.key === col.key}<span class="arrow">{sort.dir === "asc" ? "▲" : "▼"}</span>{/if}
-      </button>
-    {/each}
-  </div>
-
-  <VirtualList count={visible.length} rowHeight={ROW_HEIGHT} {getKey} bind:scrollEl>
-    {#snippet row(i)}
-      {@const entry = visible[i]}
-      {#if entry}
-        <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <div
-          class="tr"
-          data-testid="resource-row"
-          class:clickable={!!onselect}
-          class:selected={entry.key === selectedKey}
-          class:checked={selected.has(entry.key)}
-          role="row"
-          tabindex="-1"
-          style:grid-template-columns={template}
-          onclick={() => onselect?.(entry.row)}
-          oncontextmenu={(e) => openMenu(e, entry.row)}
+  <!-- ARIA grid: the grid keeps DOM focus and points at the focused row. -->
+  <div
+    class="grid"
+    role="grid"
+    tabindex="0"
+    aria-label={kind.label}
+    aria-rowcount={visible.length + 1}
+    aria-colcount={columns.length + 1}
+    aria-multiselectable="true"
+    aria-activedescendant={focusedIndex >= 0 ? rowId(focusedIndex) : undefined}
+    bind:this={gridEl}
+  >
+    <div class="head" role="row" aria-rowindex={1} style:grid-template-columns={template}>
+      <div class="th check" role="columnheader">
+        <input
+          type="checkbox"
+          aria-label="Select all visible rows"
+          checked={allSelected}
+          indeterminate={someSelected}
+          onchange={toggleAll}
+        />
+      </div>
+      {#each columns as col (col.key)}
+        <button
+          type="button"
+          class="th"
+          role="columnheader"
+          aria-sort={sort?.key === col.key ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
+          onclick={() => toggleSort(col.key)}
         >
-          <div class="td check" role="cell">
-            <input
-              type="checkbox"
-              aria-label="Select {entry.row.name}"
-              checked={selected.has(entry.key)}
-              onclick={(e) => {
-                e.stopPropagation();
-                toggleRow(entry.key, e.shiftKey);
-              }}
-              onchange={() => {}}
-            />
-          </div>
-          {#each columns as col (col.key)}
-            <div class="td {col.cls?.(entry.row) ?? ''}" role="cell" title={col.text(entry.row, { metrics, now })}>
-              {col.text(entry.row, { metrics, now })}
+          {col.label}
+          {#if sort?.key === col.key}<span class="arrow">{sort.dir === "asc" ? "▲" : "▼"}</span>{/if}
+        </button>
+      {/each}
+    </div>
+
+    <VirtualList bind:this={list} count={visible.length} rowHeight={ROW_HEIGHT} {getKey} bind:scrollEl>
+      {#snippet row(i)}
+        {@const entry = visible[i]}
+        {#if entry}
+          <!-- Rows take no focus: the grid does, and points at the focused row
+               (aria-activedescendant); keys are handled in stores/keyboard.svelte.ts. -->
+          <!-- svelte-ignore a11y_click_events_have_key_events, a11y_interactive_supports_focus -->
+          <div
+            class="tr"
+            id={rowId(i)}
+            data-testid="resource-row"
+            class:clickable={!!onselect}
+            class:selected={entry.key === selectedKey}
+            class:checked={selected.has(entry.key)}
+            class:focused={i === focusedIndex}
+            role="row"
+            aria-rowindex={i + 2}
+            aria-selected={selected.has(entry.key)}
+            style:grid-template-columns={template}
+            onclick={() => {
+              focusedKey = entry.key;
+              onselect?.(entry.row);
+            }}
+            oncontextmenu={(e) => openMenu(e, entry.row)}
+          >
+            <div class="td check" role="gridcell">
+              <input
+                type="checkbox"
+                aria-label="Select {entry.row.name}"
+                checked={selected.has(entry.key)}
+                onclick={(e) => {
+                  e.stopPropagation();
+                  toggleRow(entry.key, e.shiftKey);
+                }}
+                onchange={() => {}}
+              />
             </div>
-          {/each}
-        </div>
-      {/if}
-    {/snippet}
-  </VirtualList>
+            {#each columns as col (col.key)}
+              <div class="td {col.cls?.(entry.row) ?? ''}" role="gridcell" title={col.text(entry.row, { metrics, now })}>
+                {col.text(entry.row, { metrics, now })}
+              </div>
+            {/each}
+          </div>
+        {/if}
+      {/snippet}
+    </VirtualList>
+  </div>
 
   {#if menu}
     <ContextMenu {...menu} onclose={() => (menu = null)} />
@@ -217,6 +331,20 @@
     flex-direction: column;
     padding: 0 16px 16px;
     position: relative;
+  }
+  .grid {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    outline: none;
+  }
+  .grid:focus-visible .tr.focused {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+  .tr.focused {
+    box-shadow: inset 3px 0 0 var(--accent);
   }
   .head {
     display: grid;
