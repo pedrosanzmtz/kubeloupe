@@ -1,11 +1,14 @@
 <script lang="ts">
-  import { app, switchNamespace } from "../stores/app.svelte";
+  import { app, currentKind, switchNamespace } from "../stores/app.svelte";
+
+  // Only namespaced kinds can be narrowed to a namespace.
+  const namespaced = $derived(currentKind()?.resource.namespaced ?? false);
 </script>
 
 <div class="toolbar">
   <select
     class="select"
-    class:invisible={app.view !== "pods"}
+    class:invisible={!namespaced}
     aria-label="Namespace"
     value={app.namespace}
     onchange={(e) => switchNamespace(e.currentTarget.value)}

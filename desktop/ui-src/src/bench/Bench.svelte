@@ -1,14 +1,42 @@
 <script lang="ts">
   import { onDestroy, tick } from "svelte";
   import ResourceTable from "../lib/components/ResourceTable.svelte";
-  import { EMPTY_METRICS, podKey } from "../lib/columns";
+  import { EMPTY_METRICS } from "../lib/columns";
   import type { Metrics, Row } from "../lib/columns";
-  import type { PodInfo, PodUsage } from "../lib/bindings";
+  import type { PodUsage, ResourceKind } from "../lib/bindings";
   import { KeyedStore } from "../lib/stores/keyed.svelte";
 
   // Same store, table and virtual list as the real Pods view, fed by a
   // synthetic watch: no Tauri, no cluster. See the README for how to run it.
-  const store = new KeyedStore<Row>((row) => podKey(row as PodInfo));
+  const store = new KeyedStore<Row>((row) => row.key);
+
+  const col = (key: string, label: string, kind: ResourceKind["columns"][number]["kind"]) => ({
+    key,
+    label,
+    kind,
+  });
+  // The same columns the backend registry declares for pods.
+  const podKind: ResourceKind = {
+    resource: { group: "", version: "v1", kind: "Pod", plural: "pods", namespaced: true },
+    id: "v1/pods",
+    label: "Pods",
+    category: "workloads",
+    crd: false,
+    verbs: ["list", "watch"],
+    short_names: [],
+    columns: [
+      col("name", "Name", "text"),
+      col("namespace", "Namespace", "text"),
+      col("ready", "Ready", "text"),
+      col("status", "Status", "status"),
+      col("restarts", "Restarts", "number"),
+      col("node", "Node", "text"),
+      col("age", "Age", "age"),
+      col("cpu", "CPU", "podCpu"),
+      col("memory", "Memory", "podMemory"),
+    ],
+  };
+  const STATUS_CELL = 3;
 
   let total = $state(10_000);
   let changesPerBatch = $state(200);
@@ -33,14 +61,15 @@
   let serial = 0;
   const nsOf = (i: number) => `ns-${i % 40}`;
 
-  function pod(i: number, phase = PHASES[i % PHASES.length]): PodInfo {
+  function pod(i: number, phase = PHASES[i % PHASES.length]): Row {
+    const name = `app-${i}-${(i * 2654435761).toString(36).slice(0, 5)}`;
+    const namespace = nsOf(i);
     return {
+      key: `${namespace}/${name}`,
       created: Math.floor(Date.now() / 1000) - (i % 5000) * 60,
-      name: `app-${i}-${(i * 2654435761).toString(36).slice(0, 5)}`,
-      namespace: nsOf(i),
-      phase,
-      node: `node-${i % 50}`,
-      age: "",
+      name,
+      namespace,
+      cells: [name, namespace, "1/1", phase, String(i % 7), `node-${i % 50}`, "", "", ""],
     };
   }
 
@@ -67,8 +96,8 @@
     const t0 = performance.now();
     const pods = new Map<string, PodUsage>();
     for (const e of store.entries) {
-      const p = e.row as PodInfo;
-      pods.set(podKey(p), {
+      const p = e.row;
+      pods.set(p.key, {
         namespace: p.namespace,
         name: p.name,
         cpu_millicores: Math.floor(Math.random() * 2000),
@@ -89,8 +118,9 @@
     const adds = Math.floor(changesPerBatch * 0.1);
     for (let k = 0; k < updates; k++) {
       const e = entries[Math.floor(Math.random() * entries.length)];
-      const p = e.row as PodInfo;
-      applied.push({ ...p, phase: PHASES[Math.floor(Math.random() * PHASES.length)] });
+      const cells = [...e.row.cells];
+      cells[STATUS_CELL] = PHASES[Math.floor(Math.random() * PHASES.length)];
+      applied.push({ ...e.row, cells });
     }
     for (let k = 0; k < adds; k++) applied.push(pod(serial++));
     for (let k = 0; k < adds; k++) {
@@ -182,7 +212,7 @@
   <div class="log">{#each log as l (l)}<div>{l}</div>{/each}</div>
   <div class="table">
     <ResourceTable
-      kind="pods"
+      kind={podKind}
       {store}
       {metrics}
       {now}

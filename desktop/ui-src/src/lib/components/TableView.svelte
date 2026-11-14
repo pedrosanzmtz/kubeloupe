@@ -1,14 +1,13 @@
 <script lang="ts">
   import { onDestroy, untrack } from "svelte";
   import ResourceTable from "./ResourceTable.svelte";
-  import { podKey } from "../columns";
-  import type { Kind, Row } from "../columns";
-  import type { PodInfo } from "../bindings";
+  import type { ResourceKind } from "../bindings";
+  import type { Row } from "../columns";
   import { app } from "../stores/app.svelte";
-  import { detail, openDetail } from "../stores/detail.svelte";
+  import { detail, openDetail, targetKey } from "../stores/detail.svelte";
   import { live } from "../stores/live.svelte";
 
-  let { kind }: { kind: Kind } = $props();
+  let { kind }: { kind: ResourceKind } = $props();
 
   // (Re)start the watch when the namespace changes or Refresh is pressed.
   // The view itself is switched by remounting this component.
@@ -20,10 +19,10 @@
 
   onDestroy(() => live.stop());
 
-  const selectedKey = $derived(kind === "pods" && detail.pod ? podKey(detail.pod) : null);
+  const selectedKey = $derived(detail.target ? targetKey(detail.target) : null);
 
   function onselect(row: Row) {
-    if (kind === "pods") openDetail(row as PodInfo);
+    openDetail({ resource: kind.resource, namespace: row.namespace, name: row.name });
   }
 
   function oncount(shown: number, total: number) {
@@ -38,6 +37,6 @@
   now={live.now}
   search={app.search}
   {selectedKey}
-  onselect={kind === "pods" ? onselect : undefined}
+  {onselect}
   {oncount}
 />

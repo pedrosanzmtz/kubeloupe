@@ -1,13 +1,14 @@
 <script lang="ts">
   import VirtualList from "./VirtualList.svelte";
+  import type { ResourceKind } from "../bindings";
   import { columnsFor } from "../columns";
-  import type { Kind, Metrics, Row } from "../columns";
+  import type { Metrics, Row } from "../columns";
   import type { KeyedStore } from "../stores/keyed.svelte";
   import { visibleEntries } from "../view";
   import type { Sort } from "../view";
 
   interface Props {
-    kind: Kind;
+    kind: ResourceKind;
     store: KeyedStore<Row>;
     metrics: Metrics;
     now: number;

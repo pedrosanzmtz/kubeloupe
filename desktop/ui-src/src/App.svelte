@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import Header from "./lib/components/Header.svelte";
   import Sidebar from "./lib/components/Sidebar.svelte";
   import ErrorBanner from "./lib/components/ErrorBanner.svelte";
@@ -8,7 +8,9 @@
   import Overview from "./lib/components/Overview.svelte";
   import TableView from "./lib/components/TableView.svelte";
   import DetailPanel from "./lib/components/DetailPanel.svelte";
-  import { app, loadContexts, loadNamespaces } from "./lib/stores/app.svelte";
+  import GenericDetail from "./lib/components/GenericDetail.svelte";
+  import { isPod } from "./lib/columns";
+  import { app, currentKind, loadContexts, loadKinds, loadNamespaces } from "./lib/stores/app.svelte";
   import { detail } from "./lib/stores/detail.svelte";
   import { live } from "./lib/stores/live.svelte";
 
@@ -24,6 +26,15 @@
       unlisten.then((un) => un());
     };
   });
+
+  // Discover what the cluster serves on start, on Refresh and on a context
+  // switch (all bump the nonce).
+  $effect(() => {
+    void app.refreshNonce;
+    untrack(loadKinds);
+  });
+
+  const kind = $derived(currentKind());
 </script>
 
 <Header />
@@ -36,15 +47,20 @@
     <ErrorBanner />
     {#if app.view === "overview"}
       <Overview />
-    {:else}
-      {#key app.view}
-        <TableView kind={app.view} />
+    {:else if kind}
+      {#key kind.id}
+        <TableView {kind} />
       {/key}
     {/if}
   </section>
-  {#if detail.pod && app.view === "pods"}
+  {#if detail.target && kind && detail.target.resource.kind === kind.resource.kind &&
+    detail.target.resource.group === kind.resource.group}
     {#key detail.nonce}
-      <DetailPanel pod={detail.pod} />
+      {#if isPod(kind)}
+        <DetailPanel target={detail.target} />
+      {:else}
+        <GenericDetail target={detail.target} />
+      {/if}
     {/key}
   {/if}
 </div>

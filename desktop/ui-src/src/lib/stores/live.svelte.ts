@@ -1,7 +1,8 @@
 import { commands, events } from "../bindings";
 import type { WatchBatch, WatchStateChanged } from "../bindings";
-import { EMPTY_METRICS, podKey } from "../columns";
-import type { Kind, Metrics, Row } from "../columns";
+import type { ResourceKind } from "../bindings";
+import { EMPTY_METRICS, isNode, isPod } from "../columns";
+import type { Metrics, Row } from "../columns";
 import { setStatus, showError, stamp } from "./app.svelte";
 import { KeyedStore } from "./keyed.svelte";
 
@@ -12,7 +13,7 @@ const WATCH_RETRY_MS = 5_000;
 type WatchEvent = { kind: "batch"; payload: WatchBatch } | { kind: "state"; payload: WatchStateChanged };
 
 /**
- * The live table behind Pods / Nodes / Namespaces.
+ * The live table behind every resource view.
  *
  * The backend watches the cluster and pushes coalesced `watch-batch` events
  * ({snapshot, applied, deleted}); they land in a keyed store. Metrics cannot
@@ -20,7 +21,7 @@ type WatchEvent = { kind: "batch"; payload: WatchBatch } | { kind: "state"; payl
  * recomputed from `created` whenever `now` ticks.
  */
 export class LiveTable {
-  store = new KeyedStore<Row>((row) => ("namespace" in row ? podKey(row) : row.name));
+  store = new KeyedStore<Row>((row) => row.key);
   metrics = $state.raw<Metrics>(EMPTY_METRICS);
   now = $state.raw(Date.now());
 
@@ -51,7 +52,7 @@ export class LiveTable {
     }
     if (ev.payload.id !== this.#watchId) return; // a stopped watch
     if (ev.kind === "batch") {
-      this.store.applyBatch(ev.payload as unknown as { snapshot: boolean; applied: Row[]; deleted: string[] });
+      this.store.applyBatch(ev.payload);
       stamp();
     } else {
       this.#setWatchState(ev.payload);
@@ -70,7 +71,7 @@ export class LiveTable {
     }
   }
 
-  async start(kind: Kind, namespace: string | null) {
+  async start(kind: ResourceKind, namespace: string | null) {
     this.stop();
     const token = ++this.#token;
     this.#starting = true;
@@ -78,7 +79,10 @@ export class LiveTable {
     this.#setWatchState({ id: "", state: "connecting" });
     let id: string;
     try {
-      id = await commands.cmdWatchStart(kind, kind === "pods" ? namespace || null : null);
+      id = await commands.cmdWatchStart(
+        kind.resource,
+        kind.resource.namespaced ? namespace || null : null,
+      );
     } catch (e) {
       if (token !== this.#token) return;
       this.#starting = false;
@@ -94,8 +98,11 @@ export class LiveTable {
     this.#watchId = id;
     this.#starting = false;
     for (const ev of this.#buffer.splice(0)) this.#onEvent(ev);
-    this.loadMetrics();
-    this.#metricsTimer = setInterval(() => this.loadMetrics(), METRICS_INTERVAL_MS);
+    if (isPod(kind) || isNode(kind)) {
+      // Only pods and nodes have metric columns.
+      this.loadMetrics();
+      this.#metricsTimer = setInterval(() => this.loadMetrics(), METRICS_INTERVAL_MS);
+    }
     this.#ageTimer = setInterval(() => (this.now = Date.now()), AGE_INTERVAL_MS);
   }
 
@@ -120,7 +127,7 @@ export class LiveTable {
       const snap = await commands.cmdGetMetrics();
       if (token !== this.#token) return;
       next = {
-        pods: new Map(snap.pods.map((p) => [podKey(p), p])),
+        pods: new Map(snap.pods.map((p) => [`${p.namespace}/${p.name}`, p])),
         nodes: new Map(snap.nodes.map((n) => [n.name, n])),
       };
     } catch {

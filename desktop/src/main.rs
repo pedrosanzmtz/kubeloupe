@@ -3,11 +3,13 @@
 use futures::SinkExt;
 use kube::api::TerminalSize;
 use kube::Client;
+use kubeloupe::resources::{
+    self, AccessResult, ResourceDetail, ResourceKind, ResourceRef, ResourceRow,
+};
 use kubeloupe::{
-    apply_pod_yaml, batch_lines, client_for_context, exec_pod, get_namespaces, get_node_metrics,
-    get_nodes, get_overview, get_pod_details, get_pod_metrics, get_pod_yaml, get_pods,
-    list_contexts, serve_port_forward, stream_pod_logs, watch, ContextInfo, LogOptions,
-    NamespaceInfo, NodeInfo, NodeUsage, Overview, PodDetail, PodInfo, PodUsage,
+    batch_lines, client_for_context, exec_pod, get_namespaces, get_node_metrics, get_overview,
+    get_pod_details, get_pod_metrics, list_contexts, serve_port_forward, stream_pod_logs, watch,
+    ContextInfo, LogOptions, NamespaceInfo, NodeUsage, Overview, PodDetail, PodUsage,
 };
 use serde::Serialize;
 use specta::Type;
@@ -57,6 +59,8 @@ struct AppState {
     forwards: Mutex<HashMap<String, ForwardSession>>,
     /// Running resource watchers, by watch id.
     watches: Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>,
+    /// What the last discovery found, so watches can look up their columns.
+    kinds: Mutex<Vec<ResourceKind>>,
 }
 
 fn selected_context(state: &State<'_, AppState>) -> Option<String> {
@@ -106,28 +110,9 @@ fn stop_all_forwards(state: &State<'_, AppState>) {
 
 #[tauri::command]
 #[specta::specta]
-async fn cmd_list_pods(
-    state: State<'_, AppState>,
-    namespace: Option<String>,
-) -> Result<Vec<PodInfo>, String> {
-    let client = client(&state).await?;
-    get_pods(&client, namespace.as_deref())
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-#[specta::specta]
 async fn cmd_list_namespaces(state: State<'_, AppState>) -> Result<Vec<NamespaceInfo>, String> {
     let client = client(&state).await?;
     get_namespaces(&client).await.map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-#[specta::specta]
-async fn cmd_list_nodes(state: State<'_, AppState>) -> Result<Vec<NodeInfo>, String> {
-    let client = client(&state).await?;
-    get_nodes(&client).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -297,23 +282,15 @@ async fn cmd_get_metrics(state: State<'_, AppState>) -> Result<MetricsSnapshot, 
     })
 }
 
-/// One coalesced set of changes for the watch `id`.
-#[derive(Debug, Clone, Serialize, Type)]
-struct WatchBatchOf<T> {
+/// One coalesced set of table rows for the watch `id`: the first batch is a
+/// full snapshot, later ones are incremental.
+#[derive(Debug, Clone, Serialize, Type, Event)]
+struct WatchBatch {
     id: String,
     snapshot: bool,
-    applied: Vec<T>,
+    applied: Vec<ResourceRow>,
+    /// Keys of removed rows.
     deleted: Vec<String>,
-}
-
-/// Payload of the `watch-batch` event. Which variant arrives depends on the
-/// `kind` the watch was started with; the variants are not tagged on the wire.
-#[derive(Debug, Clone, Serialize, Type, Event)]
-#[serde(untagged)]
-enum WatchBatch {
-    Pods(WatchBatchOf<PodInfo>),
-    Nodes(WatchBatchOf<NodeInfo>),
-    Namespaces(WatchBatchOf<NamespaceInfo>),
 }
 
 /// Payload of the `watch-state` event.
@@ -327,23 +304,18 @@ struct WatchStateChanged {
 
 /// Forward a watch to the webview: state changes as `watch-state`, rows as
 /// coalesced `watch-batch` events.
-async fn pump_watch<T, S>(
-    app: AppHandle,
-    id: String,
-    updates: S,
-    wrap: fn(WatchBatchOf<T>) -> WatchBatch,
-) where
-    T: watch::Keyed + Clone + Serialize + Send + 'static,
-    S: futures::Stream<Item = watch::Update<T>> + Unpin,
+async fn pump_watch<S>(app: AppHandle, id: String, updates: S)
+where
+    S: futures::Stream<Item = watch::Update<ResourceRow>> + Unpin,
 {
     watch::run_batched(updates, watch::DEFAULT_FLUSH, |out| match out {
         watch::Output::Batch(batch) => {
-            let _ = wrap(WatchBatchOf {
+            let _ = WatchBatch {
                 id: id.clone(),
                 snapshot: batch.snapshot,
                 applied: batch.applied,
                 deleted: batch.deleted,
-            })
+            }
             .emit(&app);
         }
         watch::Output::State(state) => {
@@ -357,35 +329,62 @@ async fn pump_watch<T, S>(
     .await;
 }
 
-/// Start watching `kind` ("pods", "nodes" or "namespaces"). Returns the
-/// watch id carried by the `watch-batch` / `watch-state` events. The first
-/// batch is a full snapshot; later ones are incremental.
+/// Discover every kind the cluster serves (including CRDs) with its columns.
+#[tauri::command]
+#[specta::specta]
+async fn cmd_discover(state: State<'_, AppState>) -> Result<Vec<ResourceKind>, String> {
+    let client = client(&state).await?;
+    let kinds = resources::discover(&client)
+        .await
+        .map_err(|e| e.to_string())?;
+    *state.kinds.lock().unwrap() = kinds.clone();
+    Ok(kinds)
+}
+
+/// Which of the kinds the current user may list.
+#[tauri::command]
+#[specta::specta]
+async fn cmd_check_access(
+    state: State<'_, AppState>,
+    kinds: Vec<ResourceRef>,
+) -> Result<Vec<AccessResult>, String> {
+    let client = client(&state).await?;
+    Ok(resources::check_access(&client, &kinds).await)
+}
+
+/// The discovered kind for `resource`, discovering first if needed.
+async fn kind_of(
+    state: &State<'_, AppState>,
+    client: &Client,
+    resource: &ResourceRef,
+) -> Result<ResourceKind, String> {
+    let find = |kinds: &[ResourceKind]| kinds.iter().find(|k| &k.resource == resource).cloned();
+    if let Some(k) = find(&state.kinds.lock().unwrap()) {
+        return Ok(k);
+    }
+    let kinds = resources::discover(client)
+        .await
+        .map_err(|e| e.to_string())?;
+    let found = find(&kinds);
+    *state.kinds.lock().unwrap() = kinds;
+    found.ok_or_else(|| format!("{} is not served by this cluster", resource.kind))
+}
+
+/// Start watching a kind (in `namespace`, if it is namespaced). Returns the
+/// watch id carried by the `watch-batch` / `watch-state` events.
 #[tauri::command]
 #[specta::specta]
 async fn cmd_watch_start(
     app: AppHandle,
     state: State<'_, AppState>,
-    kind: String,
+    resource: ResourceRef,
     namespace: Option<String>,
 ) -> Result<String, String> {
     let client = client(&state).await?;
+    let kind = kind_of(&state, &client, &resource).await?;
     let id = next_session("watch");
-    let task_id = id.clone();
-    let task = match kind.as_str() {
-        "pods" => {
-            let (_store, updates) = watch::watch_pods(&client, namespace.as_deref());
-            tauri::async_runtime::spawn(pump_watch(app, task_id, updates, WatchBatch::Pods))
-        }
-        "nodes" => {
-            let (_store, updates) = watch::watch_nodes(&client);
-            tauri::async_runtime::spawn(pump_watch(app, task_id, updates, WatchBatch::Nodes))
-        }
-        "namespaces" => {
-            let (_store, updates) = watch::watch_namespaces(&client);
-            tauri::async_runtime::spawn(pump_watch(app, task_id, updates, WatchBatch::Namespaces))
-        }
-        other => return Err(format!("cannot watch {other}")),
-    };
+    let (_store, updates) = watch::watch_resource(&client, &kind, namespace.as_deref());
+    let task = tauri::async_runtime::spawn(pump_watch(app, id.clone(), updates));
     state.watches.lock().unwrap().insert(id.clone(), task);
     Ok(id)
 }
@@ -418,6 +417,7 @@ async fn cmd_set_context(state: State<'_, AppState>, name: Option<String>) -> Re
     stop_all_exec(&state);
     stop_all_forwards(&state);
     stop_all_watches(&state);
+    state.kinds.lock().unwrap().clear();
     *state.context.lock().unwrap() = name;
     *state.client.lock().await = None;
     Ok(())
@@ -657,27 +657,59 @@ async fn cmd_portforward_stop(state: State<'_, AppState>, session: String) -> Re
 
 #[tauri::command]
 #[specta::specta]
-async fn cmd_get_pod_yaml(
+async fn cmd_get_resource_detail(
     state: State<'_, AppState>,
+    resource: ResourceRef,
     namespace: String,
     name: String,
+) -> Result<ResourceDetail, String> {
+    let client = client(&state).await?;
+    resources::get_resource_detail(&client, &resource, &namespace, &name)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// An object as YAML. Secret values stay hidden unless `reveal` is set.
+#[tauri::command]
+#[specta::specta]
+async fn cmd_get_resource_yaml(
+    state: State<'_, AppState>,
+    resource: ResourceRef,
+    namespace: String,
+    name: String,
+    reveal: bool,
 ) -> Result<String, String> {
     let client = client(&state).await?;
-    get_pod_yaml(&client, &namespace, &name)
+    resources::get_resource_yaml(&client, &resource, &namespace, &name, reveal)
         .await
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 #[specta::specta]
-async fn cmd_apply_pod_yaml(
+async fn cmd_apply_resource_yaml(
     state: State<'_, AppState>,
+    resource: ResourceRef,
     namespace: String,
     name: String,
     yaml: String,
 ) -> Result<(), String> {
     let client = client(&state).await?;
-    apply_pod_yaml(&client, &namespace, &name, &yaml)
+    resources::apply_resource_yaml(&client, &resource, &namespace, &name, &yaml)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn cmd_delete_resource(
+    state: State<'_, AppState>,
+    resource: ResourceRef,
+    namespace: String,
+    name: String,
+) -> Result<(), String> {
+    let client = client(&state).await?;
+    resources::delete_resource(&client, &resource, &namespace, &name)
         .await
         .map_err(|e| e.to_string())
 }
@@ -687,9 +719,9 @@ async fn cmd_apply_pod_yaml(
 fn specta_builder() -> Builder<tauri::Wry> {
     Builder::<tauri::Wry>::new()
         .commands(collect_commands![
-            cmd_list_pods,
             cmd_list_namespaces,
-            cmd_list_nodes,
+            cmd_discover,
+            cmd_check_access,
             cmd_get_pod_details,
             cmd_stream_pod_logs,
             cmd_stop_pod_logs,
@@ -706,8 +738,10 @@ fn specta_builder() -> Builder<tauri::Wry> {
             cmd_exec_close,
             cmd_portforward_start,
             cmd_portforward_stop,
-            cmd_get_pod_yaml,
-            cmd_apply_pod_yaml
+            cmd_get_resource_detail,
+            cmd_get_resource_yaml,
+            cmd_apply_resource_yaml,
+            cmd_delete_resource
         ])
         .events(collect_events![
             WatchBatch,
@@ -744,6 +778,7 @@ fn main() {
             exec_sessions: Mutex::new(HashMap::new()),
             forwards: Mutex::new(HashMap::new()),
             watches: Mutex::new(HashMap::new()),
+            kinds: Mutex::new(Vec::new()),
         })
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {

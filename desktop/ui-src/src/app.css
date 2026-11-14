@@ -93,14 +93,26 @@ th {
   letter-spacing: 0.04em;
 }
 
-.phase-Running {
+.phase-Running,
+.phase-Active,
+.phase-Bound,
+.phase-Succeeded,
+.phase-Normal {
   color: var(--green);
 }
-.phase-Pending {
+.phase-Pending,
+.phase-Terminating,
+.phase-Released,
+.phase-Warning,
+.phase-ContainerCreating {
   color: var(--amber);
 }
 .phase-Failed,
-.phase-CrashLoopBackOff {
+.phase-Lost,
+.phase-Error,
+.phase-CrashLoopBackOff,
+.phase-ImagePullBackOff,
+.phase-ErrImagePull {
   color: var(--red);
 }
 
