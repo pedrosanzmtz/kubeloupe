@@ -2,97 +2,80 @@
 
 [![CI](https://github.com/pedrosanzmtz/kubeloupe/actions/workflows/ci.yml/badge.svg)](https://github.com/pedrosanzmtz/kubeloupe/actions/workflows/ci.yml)
 
-A Lens alternative written in Rust — a Kubernetes IDE that stays fast while
-streaming logs and watching cluster state.
+A Lens alternative written in Rust: a Kubernetes IDE that stays fast while
+streaming logs and watching cluster state. It comes as a desktop app (Tauri +
+Svelte) and a CLI, both built on the same Rust core.
 
-> **Status:** the desktop app (Tauri) is in: Overview, Pods, Namespaces and
-> Nodes views with CPU/memory usage, pod details with live log streaming, a
-> terminal (pod exec), port-forwarding and YAML editing, and multi-cluster
-> switching from the kubeconfig contexts.
-
-## What it does today
-
-- Desktop app — Overview (counts, pods by namespace, recent events),
-  Pods, Namespaces and Nodes views, with namespace filter, search and
-  30s auto-refresh; click a pod for its details and live logs, an
-  interactive terminal (pod exec via xterm.js), port-forwarding to
-  localhost, and a YAML editor with server-side apply; every resource
-  type the cluster serves (workloads, network, config, storage, CRDs) can be
-  browsed, edited and deleted from a Lens-style grouped sidebar, with
-  Secret values hidden until revealed; Pods and Nodes
-  show CPU/memory usage when the metrics API is available; switch
-  clusters from the context selector in the header (see below)
-- `kubeloupe get <kind> [-n <namespace>]` — list any resource type found by
-  API discovery, built-in or custom (`deploy`, `svc`, `widgets.example.com`),
-  with the same columns as the desktop app
-- `kubeloupe pods` — list pods across all namespaces (name, namespace, phase, node)
-- `kubeloupe pods -n <namespace>` — list pods in one namespace
-- `kubeloupe namespaces` — list namespaces
-- `kubeloupe nodes` — list nodes with readiness and kubelet version
-- `kubeloupe logs <pod> [-n <namespace>] [--tail N]` — print a pod's logs
-- `kubeloupe top [pods|nodes]` — CPU/memory usage (needs metrics-server)
-- `kubeloupe yaml <pod> [-n <namespace>]` — print a pod as YAML
-- `kubeloupe exec <pod> [-n <namespace>] [-c <container>] -- <command>` —
-  run a command in a pod and print its output
-- `kubeloupe port-forward <pod> <port> [-n <namespace>]` — forward a pod
-  port to localhost until Ctrl-C
-- Actions (errors come back in plain words: not allowed, already gone, blocked
-  by a PodDisruptionBudget):
-  - `kubeloupe scale <deploy|sts|rs>/<name> --replicas N [-n <namespace>]`
-  - `kubeloupe restart <deploy|sts|ds>/<name> [-n <namespace>]` — rollout restart
-  - `kubeloupe cordon <node>` / `uncordon <node>`
-  - `kubeloupe drain <node> [--timeout SECS] [--pod-selector SEL]` — cordon, then
-    evict pods through the Eviction API with progress output; skips DaemonSet
-    and mirror pods, retries evictions a PodDisruptionBudget refuses
-  - `kubeloupe trigger cronjob/<name>`, `suspend cronjob/<name>`,
-    `resume cronjob/<name>`
-  - `kubeloupe delete <kind>/<name> [-n <namespace>] [--force]` — `--force`
-    (pods only) uses grace period 0
+> **Status:** early. The desktop app browses every resource type the cluster
+> serves (CRDs included) with live watches, shows logs for pods and whole
+> workloads, opens terminals and port-forwards, edits YAML with server-side
+> apply, and runs the common actions (scale, restart, cordon, drain, trigger,
+> suspend, delete). There is no tagged release yet. What comes next is tracked
+> in the [roadmap (#24)](https://github.com/pedrosanzmtz/kubeloupe/issues/24).
 
 ## Desktop app
 
-The desktop app is a Tauri app in `desktop/`. It talks to the cluster
-through the same Rust core as the CLI.
+- **Every resource type**, built-in or custom, found through API discovery
+  and grouped in a Lens-style sidebar (workloads, network, config, storage,
+  cluster, custom resources). Kinds you aren't allowed to list are
+  greyed out.
+- **Live tables**: lists are kept up to date by Kubernetes watches, not by
+  polling, and stay smooth with thousands of rows. Filter by namespace and
+  by text. Pods and Nodes show CPU/memory usage when the metrics API is
+  available.
+- **Overview**: object counts, pods by namespace and recent events, refreshed
+  every 30 seconds.
+- **Details** for any object. For pods: live logs (pick the container, or the
+  previous instance of a crashed one), an interactive terminal (pod exec), and
+  port-forwarding to localhost.
+- **Workload logs**: follow every pod of a Deployment, StatefulSet, DaemonSet
+  or Job in one stream, including pods that a rollout replaces.
+- **YAML editor** with server-side apply. After saving, it tells you which
+  fields it took over from other field managers (for example from
+  `kubectl` or a controller). Secret values stay hidden until you reveal them.
+- **Actions** from the row menu, the detail panel or on several selected rows:
+  scale, rollout restart, cordon/uncordon, drain (with progress, respecting
+  PodDisruptionBudgets), trigger/suspend/resume a CronJob, delete and force
+  delete. Destructive ones ask for confirmation and list the exact objects.
+- **Multi-cluster**: switch between your kubeconfig contexts from the header.
 
-The UI is Svelte 5 + Vite + TypeScript in `desktop/ui-src/`. To run it you
-need Node (the version in `desktop/ui-src/.nvmrc`) and the Tauri CLI:
+## CLI
 
-```sh
-cargo install tauri-cli --version "^2" --locked   # once
-npm --prefix desktop/ui-src ci                    # once, and after lockfile changes
-cd desktop && cargo tauri dev                     # starts Vite on :1420 and the app
-```
+The CLI uses the current kubeconfig context. Run `kubeloupe --help` or
+`kubeloupe <command> --help` for every option.
 
-A debug build of the desktop crate loads the UI from the Vite dev server
-(`devUrl` in `desktop/tauri.conf.json`), so `cargo run -p kubeloupe-desktop`
-on its own shows a connection error unless `npm --prefix desktop/ui-src run
-dev` is running. Release builds (`cargo tauri build`) bundle `ui-src/dist`.
+| Command | What it does |
+|---|---|
+| `kubeloupe get <kind> [-n NS]` | List any resource type, built-in or custom (`deploy`, `svc`, `widgets.example.com`), with the same columns as the app |
+| `kubeloupe watch [<kind>] [-n NS]` | Print live changes to a resource type (default `pods`) until Ctrl-C |
+| `kubeloupe pods [-n NS]` | List pods (all namespaces by default) |
+| `kubeloupe namespaces` | List namespaces |
+| `kubeloupe nodes` | List nodes with readiness and kubelet version |
+| `kubeloupe logs <pod> [-n NS] [-c CONTAINER] [-p] [-f] [--tail N]` | A pod's logs: `-c` picks a container, `-p` the previous (crashed) instance, `-f` follows |
+| `kubeloupe logs deploy/<name>` (also `sts/`, `ds/`, `job/`) | The logs of every pod of a workload, as `[pod] line` |
+| `kubeloupe top [pods\|nodes]` | CPU/memory usage (needs metrics-server) |
+| `kubeloupe yaml <pod> [-n NS]` | Print a pod as YAML |
+| `kubeloupe exec <pod> [-n NS] [-c CONTAINER] -- <command>` | Run a command in a pod and print its output |
+| `kubeloupe port-forward <pod> <port> [-n NS]` | Forward a pod port to a free local port until Ctrl-C |
 
-The typed IPC bindings (`desktop/ui-src/src/lib/bindings.ts`) are generated by
-tauri-specta whenever a debug build starts, and by
-`cargo test -p kubeloupe-desktop export_typescript_bindings`. Commit the
-regenerated file when you change a command or event; CI fails if it is stale.
+Actions report errors in plain words (not allowed, already gone, blocked by a
+PodDisruptionBudget). Namespaced actions default to the `default` namespace.
 
-### Table benchmark
-
-`desktop/ui-src/bench.html` is a dev-only page (not part of the build) that
-feeds the real Pods table a synthetic 10k-row watch: batched diffs every
-200 ms, a metrics merge every 20 s, auto-scroll and a filter box, and it shows
-fps, frame times and batch apply+render times. To measure in WebKitGTK (the
-slowest webview), start `npm --prefix desktop/ui-src run dev`, then either run
-`cd desktop && cargo tauri dev` and open the web inspector console to run
-`location.assign("/bench.html")`, or open `http://localhost:1420/bench.html` in
-any WebKitGTK browser (for example Epiphany). Click "Fill", "Start churn" and
-"Auto scroll".
-
-On Linux, Tauri needs the WebKitGTK system libraries first
-(`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `libayatana-appindicator3-dev`,
-`librsvg2-dev`). On macOS and Windows they are not needed.
+| Command | What it does |
+|---|---|
+| `kubeloupe scale <deploy\|sts\|rs>/<name> --replicas N [-n NS]` | Set the replica count |
+| `kubeloupe restart <deploy\|sts\|ds>/<name> [-n NS]` | Rollout restart |
+| `kubeloupe cordon <node>` / `kubeloupe uncordon <node>` | Mark a node unschedulable / schedulable |
+| `kubeloupe drain <node> [--timeout SECS] [--pod-selector SEL]` | Cordon, then evict the node's pods through the Eviction API with progress output. Skips DaemonSet and mirror pods and retries evictions a PodDisruptionBudget refuses |
+| `kubeloupe trigger cronjob/<name> [-n NS]` | Create a Job from a CronJob now |
+| `kubeloupe suspend cronjob/<name> [-n NS]` / `resume cronjob/<name>` | Suspend or resume a CronJob |
+| `kubeloupe delete <kind>/<name> [-n NS] [--force]` | Delete an object of any kind. `--force` (pods only) uses grace period 0 |
 
 ## Install
 
-Download the latest build from the
-[Releases page](https://github.com/pedrosanzmtz/kubeloupe/releases/latest):
+Releases will be published on the
+[Releases page](https://github.com/pedrosanzmtz/kubeloupe/releases) with these
+files:
 
 - Linux: `.AppImage` (`chmod +x` it and run) or `.deb` (`sudo apt install ./kubeloupe_*.deb`)
 - macOS: `.dmg` (universal, Apple silicon and Intel)
@@ -109,85 +92,73 @@ The builds are not signed yet, so the OS will warn you the first time:
 - Linux needs no workaround; the AppImage needs FUSE 2 (`libfuse2`) on
   recent Ubuntu.
 
-## Prerequisites
+## Build and run from source
 
-- Rust (stable) — `cargo` on your `PATH`
-- A working kubeconfig (`~/.kube/config`) pointing at a cluster, or
+You need:
+
+- Rust (stable)
+- A kubeconfig (`~/.kube/config`, or `KUBECONFIG`) pointing at a cluster, or
   in-cluster config when running inside Kubernetes
+- For the desktop app: Node (the version in `desktop/ui-src/.nvmrc`), the
+  Tauri CLI, and on Linux the WebKitGTK libraries
+  (`sudo apt-get install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev`).
+  macOS and Windows need nothing extra.
 
-## Run it
+The CLI:
 
 ```sh
-cargo run -- pods
-cargo run -- pods -n kube-system
-cargo run -- namespaces
-cargo run -- nodes
-cargo run -- logs <pod> -n <namespace>
-cargo run -- top pods
-cargo run -- yaml <pod> -n <namespace>
-cargo run -- exec <pod> -n <namespace> -- ls /
-cargo run -- port-forward <pod> 80 -n <namespace>
+cargo run -- --help
+cargo run -- get deploy -n kube-system
+cargo run -- logs deploy/<name> -n <namespace> -f
 ```
+
+The desktop app:
+
+```sh
+cargo install tauri-cli --version "^2" --locked   # once
+npm --prefix desktop/ui-src ci                    # once, and after lockfile changes
+cd desktop && cargo tauri dev                     # starts Vite on :1420 and the app
+```
+
+A debug build loads the UI from the Vite dev server, so
+`cargo run -p kubeloupe-desktop` on its own shows a connection error unless
+`npm --prefix desktop/ui-src run dev` is running. `cargo tauri build` makes a
+release build with the UI bundled.
 
 ## Test cluster
 
 `bash scripts/test-cluster/setup.sh` creates a local test cluster with
 [kind](https://kind.sigs.k8s.io/) (Kubernetes IN Docker): real nodes running
-real containers, so everything in the app — logs, pod exec,
-port-forwarding and the CPU/memory columns — can be tested end to end.
-It needs Docker, usable by your user without `sudo`
-(`sudo apt-get install -y docker.io && sudo usermod -aG docker $USER`,
-then log in again). The script installs `kind` and `kubectl` into
-`~/.local/bin` if they are missing.
+real containers, so logs, exec, port-forwarding and the CPU/memory columns
+all work end to end. It needs Docker, usable by your user without `sudo`.
+The script installs `kind` and `kubectl` into `~/.local/bin` if they are
+missing.
 
-It creates `kubeloupe-test` — a control-plane node and a worker, with:
+It creates `kubeloupe-test` (a control-plane node and a worker) with:
 
 - metrics-server (patched with `--kubelet-insecure-tls`, which kind's
   self-signed kubelet certs need), so the usage columns and `kubeloupe top`
   work; the numbers appear about a minute after it starts
-- the demo workload (`scripts/test-cluster/demo.yaml`): nginx and logger
-  deployments (the logger writes a line every 2s, handy for live logs), a
-  Pending pod (`hungry`, impossible resource request, in `default`) and a
-  crash-looping pod (`crashed`)
+- the demo workload (`scripts/test-cluster/demo.yaml`) in namespace `demo`:
+  the `web` (nginx) and `logger` deployments (the logger writes a line every
+  2 s, handy for live logs), a two-container pod (`multi`), a crash-looping
+  pod (`crashed`), and in `default` a pod that stays Pending (`hungry`)
 
-Pass `--staging` to also create `kubeloupe-staging` — a single empty node,
-so the context switcher has a second cluster to switch to. Each kind
-cluster costs roughly 500 MB–1 GB of RAM, which is why it is opt-in.
+Pass `--staging` to also create `kubeloupe-staging`, a single empty node, so
+the context switcher has a second cluster to switch to. Each kind cluster
+costs roughly 500 MB to 1 GB of RAM, which is why it is opt-in.
 
-kind adds the contexts (`kind-kubeloupe-test`, `kind-kubeloupe-staging`)
-to `~/.kube/config` and the script leaves `kind-kubeloupe-test` current, so
-`cargo run -p kubeloupe-desktop` opens against the test cluster.
+kind adds the contexts (`kind-kubeloupe-test`, `kind-kubeloupe-staging`) to
+`~/.kube/config` and the script leaves `kind-kubeloupe-test` current.
 
 Delete the clusters with `kind delete cluster --name kubeloupe-test` (and
-`kubeloupe-staging`); re-run the script to recreate them. The node
-containers normally restart with Docker after a reboot; if a cluster comes
-back broken, delete it and re-run the script.
+`kubeloupe-staging`); re-run the script to recreate them.
 
-### Integration tests
+## Contributing
 
-`tests/cluster.rs` exercises the library against the kind cluster (listing,
-logs, exec, port-forward, YAML apply, metrics, watches). The tests are
-`#[ignore]`d so plain `cargo test` stays fast. With the cluster up:
-
-```sh
-cargo test -- --ignored
-```
-
-They use the `kind-kubeloupe-test` context; set `KUBELOUPE_TEST_CONTEXT` to
-target another one. Tests that create things use a temporary namespace and
-clean up after themselves. CI runs the same thing in
-`.github/workflows/integration.yml`. The metrics test waits up to a few
-minutes on a freshly created cluster.
-
-## Roadmap
-
-- [x] Cluster overview: counts, pods by namespace, recent events
-- [x] Cluster resource usage (needs the metrics API)
-- [x] Live log streaming
-- [x] Pod exec (terminal into a container)
-- [x] Port-forwarding and resource YAML editing
-- [x] Multi-cluster support with fast switching
-- [x] Desktop UI (Tauri)
+See [CLAUDE.md](CLAUDE.md) (also available as `AGENTS.md`) for the code
+layout, the checks CI runs, how to regenerate the IPC bindings, and how to run
+the unit, frontend and cluster tests.
 
 ## License
 
