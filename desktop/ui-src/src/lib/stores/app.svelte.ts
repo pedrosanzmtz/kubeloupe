@@ -2,6 +2,7 @@ import { commands } from "../bindings";
 import type { ContextInfo, NamespaceInfo, ResourceKind } from "../bindings";
 import { joinNames, normalizeNamespaces, sameNamespaces } from "../namespaces";
 import { clampHeight } from "../dock";
+import { PORT_FORWARDS_VIEW } from "../forwards";
 import { contextToRestore, namespacesToRestore } from "../settings";
 import { closeDetail, detail, openDetail } from "./detail.svelte";
 import { contextSettings, loadSettings, settings, updateContext, updateSettings } from "./settings.svelte";
@@ -96,6 +97,10 @@ function restorePendingView() {
   const view = pendingView;
   pendingView = null;
   if (!view || view === "overview" || app.view !== "overview") return;
+  if (view === PORT_FORWARDS_VIEW) {
+    app.view = view;
+    return;
+  }
   const kind = kinds.all.find((k) => k.id === view);
   if (kind && (!kinds.denied.has(kind.id) || canOpenDenied(kind))) app.view = view;
 }

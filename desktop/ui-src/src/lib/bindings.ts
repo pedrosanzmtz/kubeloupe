@@ -79,6 +79,16 @@ export const commands = {
 	cmdExecResize: (session: string, cols: number, rows: number, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_exec_resize", { session, cols, rows }, options),
 	cmdExecClose: (session: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_exec_close", { session }, options),
 	/**
+	 *  Start the user's shell on this machine with `KUBECONFIG` pointing at a
+	 *  temp kubeconfig that selects the app's context and `namespace` (`null`:
+	 *  the context's own). The user's kubeconfig files are not changed.
+	 */
+	cmdLocalShellStart: (namespace: string | null, cols: number, rows: number, options?: InvokeOptions) => __TAURI_INVOKE<LocalShellStarted>("cmd_local_shell_start", { namespace, cols, rows }, options),
+	cmdLocalShellInput: (session: string, data: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_local_shell_input", { session, data }, options),
+	cmdLocalShellResize: (session: string, cols: number, rows: number, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_local_shell_resize", { session, cols, rows }, options),
+	/**  Kill the shell and delete its temp kubeconfig. */
+	cmdLocalShellClose: (session: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_local_shell_close", { session }, options),
+	/**
 	 *  Start forwarding `remote_port` (a number or a port name) of a pod,
 	 *  Service or workload. `local_port`: none picks the remote port if it is
 	 *  free and at least 1024, else a random one; 0 is random; any other
@@ -530,6 +540,16 @@ export type KindSettings_Serialize = {
 	sort_desc: boolean,
 	/**  Keys of the columns the user hid. */
 	hidden: string[],
+};
+
+/**
+ *  A started local shell: its session id, and the context and namespace
+ *  kubectl uses in it.
+ */
+export type LocalShellStarted = {
+	session: string,
+	context: string,
+	namespace: string,
 };
 
 /**  A container (regular or init) whose logs can be read. */

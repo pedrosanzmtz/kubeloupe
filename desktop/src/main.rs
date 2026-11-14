@@ -8,6 +8,7 @@ use tauri::Manager;
 use tauri_specta::{collect_commands, collect_events, Builder};
 
 mod commands;
+mod local_shell;
 mod log_streams;
 mod settings;
 #[cfg(unix)]
@@ -39,6 +40,10 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::exec::cmd_exec_input,
             commands::exec::cmd_exec_resize,
             commands::exec::cmd_exec_close,
+            commands::local_shell::cmd_local_shell_start,
+            commands::local_shell::cmd_local_shell_input,
+            commands::local_shell::cmd_local_shell_resize,
+            commands::local_shell::cmd_local_shell_close,
             commands::portforward::cmd_portforward_start,
             commands::portforward::cmd_portforward_stop,
             commands::portforward::cmd_portforward_list,
@@ -100,6 +105,7 @@ fn main() {
             client: tokio::sync::Mutex::new(None),
             log_streams: Default::default(),
             exec_sessions: Mutex::new(HashMap::new()),
+            local_shells: Mutex::new(HashMap::new()),
             forwards: Mutex::new(HashMap::new()),
             watches: Mutex::new(HashMap::new()),
             kinds: Mutex::new(Vec::new()),
@@ -122,11 +128,13 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error while building kubeloupe")
         .run(|app, event| {
-            // Write settings changed in the last moments before quitting.
             if let tauri::RunEvent::Exit = event {
+                // Write settings changed in the last moments before quitting.
                 if let Some(store) = app.try_state::<Arc<SettingsStore>>() {
                     store.flush();
                 }
+                // Kill the local shells and delete their temp kubeconfigs.
+                state::stop_all_local_shells(&app.state::<AppState>());
             }
         });
 }

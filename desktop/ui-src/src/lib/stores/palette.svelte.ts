@@ -13,6 +13,7 @@ import { openDetail } from "./detail.svelte";
 import { dockMenuFor } from "../dock";
 import { dock, openDockTab, toggleDock } from "./dock.svelte";
 import { activeTable, openHelp, openSettings } from "./keyboard.svelte";
+import { openLocalShell } from "./localShell";
 import { whenDiscarded } from "./unsaved.svelte";
 
 /** Ids of recently run entries, newest first (this session). */
@@ -45,6 +46,14 @@ export function paletteItems(): PaletteItem[] {
       label: "Settings…",
       terms: ["preferences", "theme", "options"],
       run: openSettings,
+    },
+    {
+      id: "cmd:local-shell",
+      group: "Command",
+      label: "New local terminal",
+      detail: "kubectl at this context and namespace",
+      terms: ["shell", "terminal", "kubectl", "console", "local"],
+      run: openLocalShell,
     },
   ];
   if (dock.tabs.length > 0) {
