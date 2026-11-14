@@ -43,6 +43,8 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::local_shell::cmd_local_shell_close,
             commands::portforward::cmd_portforward_start,
             commands::portforward::cmd_portforward_stop,
+            commands::portforward::cmd_portforward_list,
+            commands::portforward::cmd_service_ports,
             commands::resources::cmd_get_resource_detail,
             commands::resources::cmd_get_related,
             commands::resources::cmd_get_resource_yaml,
@@ -104,6 +106,9 @@ fn main() {
             kinds: Mutex::new(Vec::new()),
             drains: Mutex::new(HashMap::new()),
         })
+        // Opens forwarded URLs in the browser; the capability limits it to
+        // http://127.0.0.1 and http://localhost.
+        .plugin(tauri_plugin_opener::init())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);

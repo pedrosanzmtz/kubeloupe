@@ -28,8 +28,12 @@ Svelte) and a CLI, both built on the same Rust core.
   and the newest warning events, each linking to its object. Kept live by
   watches, not by re-listing the cluster.
 - **Details** for any object. For pods: live logs (pick the container, or the
-  previous instance of a crashed one), an interactive terminal (pod exec), and
-  port-forwarding to localhost.
+  previous instance of a crashed one) and an interactive terminal (pod exec).
+- **Port forwards** to pods, Services and workloads, on a chosen or automatic
+  local port. A Service forward picks a ready pod for each connection, so it
+  keeps working when pods restart. Network → Port Forwards lists them with
+  their current pod and status, and opens them in the browser. They keep
+  running when you close panels; switching context stops them.
 - **Workload logs**: follow every pod of a Deployment, StatefulSet, DaemonSet
   or Job in one stream, including pods that a rollout replaces.
 - **Dock**: logs and terminals open in tabs at the bottom of the window, so
@@ -92,7 +96,7 @@ namespace; lists default to all namespaces.
 | `kubeloupe logs deploy/<name>` (also `sts/`, `ds/`, `job/`) | The logs of every pod of a workload, as `[pod] line` |
 | `kubeloupe top [pods\|nodes] [-n NS]` | CPU/memory usage (needs metrics-server); `-n` limits pods to one namespace |
 | `kubeloupe exec <pod> [-n NS] [-c CONTAINER] -- <command>` | Run a command in a pod and print its output |
-| `kubeloupe port-forward <pod> <port> [-n NS]` | Forward a pod port to a free local port until Ctrl-C |
+| `kubeloupe port-forward <target> <[local:]remote>... [-n NS]` | Forward to localhost until Ctrl-C. Target: a pod name, `svc/<name>`, `deploy/<name>` (also `pod/`, `sts/`, `rs/`, `ds/`). Ports: `8080:80`, `:80` (random local), or `80` (the same local port if free and ≥ 1024, else random); the remote port may be a port name |
 
 Actions report errors in plain words (not allowed, already gone, blocked by a
 PodDisruptionBudget). Namespaced actions default to the `default` namespace.

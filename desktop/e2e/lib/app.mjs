@@ -200,7 +200,11 @@ export class App {
 
   /** Click a kind (or Overview) in the sidebar. */
   async nav(label) {
-    await (await this.find(By.xpath(`//nav//button[normalize-space()=${xq(label)}]`))).click();
+    const button = await this.find(By.xpath(`//nav//button[normalize-space()=${xq(label)}]`));
+    // The sidebar scrolls (more so with the dock open); WebKitGTK's driver
+    // refuses to click a button that is only partly visible.
+    await this.js("arguments[0].scrollIntoView({ block: 'center' })", button);
+    await button.click();
   }
 
   /** Set an input's value the way typing would (fires `input`). */

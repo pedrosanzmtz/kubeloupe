@@ -28,12 +28,11 @@ pub(crate) struct ExecSession {
     pub(crate) task: tauri::async_runtime::JoinHandle<()>,
 }
 
+/// A running port-forward; dropping it stops it.
 pub(crate) struct ForwardSession {
-    #[allow(dead_code)]
-    pub(crate) local_port: u16,
-    #[allow(dead_code)]
-    pub(crate) pod_port: u16,
-    pub(crate) task: tokio::task::JoinHandle<()>,
+    pub(crate) forward: kubeloupe::PortForward,
+    /// Epoch milliseconds, to list forwards in the order they started.
+    pub(crate) started_at: u64,
 }
 
 pub(crate) struct AppState {
@@ -103,7 +102,6 @@ pub(crate) fn stop_all_watches(state: &State<'_, AppState>) {
 
 pub(crate) fn stop_all_forwards(state: &State<'_, AppState>) {
     let mut forwards = state.forwards.lock().unwrap();
-    for (_, forward) in forwards.drain() {
-        forward.task.abort();
-    }
+    // Dropping a forward stops it.
+    forwards.clear();
 }
