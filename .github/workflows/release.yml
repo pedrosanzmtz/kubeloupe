@@ -22,6 +22,11 @@ on:
         description: "Build only and upload workflow artifacts (no release). Turning this off only works when run from a v* tag."
         type: boolean
         default: true
+  # TEMPORARY (PR #29 testing): workflow_dispatch only works once this file is
+  # on the default branch, so run the dry run on PRs that touch it. Remove
+  # before merging.
+  pull_request:
+    paths: [".github/workflows/release.yml"]
 
 permissions:
   contents: write
