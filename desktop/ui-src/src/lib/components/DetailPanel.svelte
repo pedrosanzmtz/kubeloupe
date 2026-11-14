@@ -5,19 +5,19 @@
   import ContainerCard from "./ContainerCard.svelte";
   import DetailNotices from "./DetailNotices.svelte";
   import EventsTable from "./EventsTable.svelte";
-  import LogViewer from "./LogViewer.svelte";
   import MetaSection from "./MetaSection.svelte";
   import PortForward from "./PortForward.svelte";
   import RelatedGroups from "./RelatedGroups.svelte";
-  import Terminal from "./Terminal.svelte";
   import YamlEditor from "./YamlEditor.svelte";
   import { closeDetail } from "../stores/detail.svelte";
+  import { openDockTab } from "../stores/dock.svelte";
   import type { Target } from "../stores/detail.svelte";
   import { LiveDetail } from "../stores/live-detail.svelte";
   import { LiveRelated } from "../stores/related.svelte";
 
   /** The pod panel: the generic overview plus the pod section (containers,
-   *  QoS, IPs...), logs, terminal and port-forward, and the YAML editor.
+   *  QoS, IPs...), buttons that open its logs and a shell in the dock,
+   *  port-forward, and the YAML editor.
    *  Every other kind uses `GenericDetail`. */
   let { target }: { target: Target } = $props();
   const pod = $derived({ namespace: target.namespace, name: target.name });
@@ -34,7 +34,6 @@
   $effect(() => {
     if (live.info) related.seen(live.info);
   });
-  let terminalOpen = $state(false);
   let portForward: PortForward | undefined = $state();
 
   onMount(() => {
@@ -48,6 +47,16 @@
 
   /** The terminal opens in the first regular container. */
   const shellContainer = $derived(extras?.containers.find((c) => c.kind === "regular")?.name ?? null);
+  const podRef = $derived({ resource: target.resource, namespace: target.namespace, name: target.name });
+
+  function openLogs() {
+    openDockTab({ type: "podLogs", pod: podRef, containers: extras ? $state.snapshot(extras.log_containers) : undefined });
+  }
+
+  function openShell() {
+    // Before the details load, the dock tab looks the container up itself.
+    openDockTab({ type: "terminal", pod: podRef, container: extras ? shellContainer : undefined });
+  }
 </script>
 
 <aside data-testid="detail-panel">
@@ -105,21 +114,13 @@
     {/if}
   </div>
 
-  <LogViewer {pod} containers={extras?.log_containers ?? []} ready={live.loaded} />
-
   <div class="section-header">
-    <h3>Terminal</h3>
-    {#if terminalOpen}
-      <button type="button" class="btn" onclick={() => (terminalOpen = false)}>Close</button>
-    {:else}
-      <button type="button" class="btn" disabled={live.deleted} onclick={() => (terminalOpen = true)}>
-        Open terminal
-      </button>
-    {/if}
+    <h3>Logs and shell</h3>
+    <button type="button" class="btn" onclick={openLogs} title="Opens in the dock below">Logs</button>
+    <button type="button" class="btn" disabled={live.deleted} onclick={openShell} title="Opens in the dock below">
+      Open terminal
+    </button>
   </div>
-  {#if terminalOpen}
-    <Terminal {pod} container={shellContainer} />
-  {/if}
 
   <PortForward bind:this={portForward} {pod} disabled={live.deleted} />
   <YamlEditor {target} />
