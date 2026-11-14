@@ -2,8 +2,8 @@
 
 use crate::{
     exec_command, format_cpu, format_memory, get_namespaces, get_node_metrics, get_nodes,
-    get_pod_logs, get_pod_metrics, get_pod_yaml, get_pods, resources, serve_port_forward,
-    stream_pod_logs, watch, LogOptions,
+    get_pod_logs, get_pod_metrics, get_pods, resources, serve_port_forward, stream_pod_logs, watch,
+    LogOptions,
 };
 use anyhow::{Context, Result};
 use kube::Client;
@@ -74,11 +74,15 @@ pub async fn print_pod_logs(
 // CLI output for the new commands.
 // ---------------------------------------------------------------------------
 
-/// Print `kubectl top pods`-style usage (CLI output).
-pub async fn print_top_pods(client: &Client) -> Result<()> {
-    match get_pod_metrics(client).await? {
+/// Print `kubectl top pods`-style usage (CLI output), optionally for one
+/// namespace. The namespace is queried directly (not filtered from a
+/// cluster-wide list), so it works for users limited to that namespace.
+pub async fn print_top_pods(client: &Client, namespace: Option<&str>) -> Result<()> {
+    match get_pod_metrics(client, namespace).await? {
         None => {
-            println!("Metrics API not available on this cluster (is metrics-server installed?)")
+            anyhow::bail!(
+                "Metrics API not available on this cluster (is metrics-server installed?)"
+            )
         }
         Some(usages) => {
             println!(
@@ -103,7 +107,9 @@ pub async fn print_top_pods(client: &Client) -> Result<()> {
 pub async fn print_top_nodes(client: &Client) -> Result<()> {
     match get_node_metrics(client).await? {
         None => {
-            println!("Metrics API not available on this cluster (is metrics-server installed?)")
+            anyhow::bail!(
+                "Metrics API not available on this cluster (is metrics-server installed?)"
+            )
         }
         Some(usages) => {
             println!("{:<40} {:<16} {}", "NAME", "CPU", "MEMORY");
@@ -130,13 +136,6 @@ pub async fn print_top_nodes(client: &Client) -> Result<()> {
             }
         }
     }
-    Ok(())
-}
-
-/// Print one pod as YAML (CLI output).
-pub async fn print_pod_yaml(client: &Client, namespace: Option<&str>, name: &str) -> Result<()> {
-    let yaml = get_pod_yaml(client, namespace.unwrap_or("default"), name).await?;
-    print!("{yaml}");
     Ok(())
 }
 
@@ -180,22 +179,7 @@ pub async fn exec_in_pod(
     Ok(())
 }
 
-/// Print live changes to pods, nodes or namespaces until interrupted.
-/// `kubeloupe get <kind> [-n ns]`: list any kind, built-in or custom, as a
-/// table.
-pub async fn print_get(client: &Client, resource: &str, namespace: Option<&str>) -> Result<()> {
-    let kinds = resources::discover(client).await?;
-    let kind = resources::resolve_kind(&kinds, resource)
-        .with_context(|| format!("unknown resource type: {resource}"))?;
-    let rows = resources::list_resources(client, kind, namespace).await?;
-    if rows.is_empty() {
-        println!("No resources found.");
-    } else {
-        print!("{}", resources::render_table(kind, &rows));
-    }
-    Ok(())
-}
-
+/// Print live changes to any resource type until interrupted.
 pub async fn watch_and_print(
     client: &Client,
     resource: &str,
@@ -227,4 +211,56 @@ pub async fn watch_and_print(
     let (_store, updates) = watch::watch_resource(client, kind, namespace);
     run_batched(updates, DEFAULT_FLUSH, print).await;
     Ok(())
+}
+
+/// One line for a CLI error: the context chain without repeats, and the API
+/// server's own message instead of kube's debug dump of an API error.
+pub fn error_text(err: &anyhow::Error) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for cause in err.chain() {
+        let api = match cause.downcast_ref::<kube::Error>() {
+            Some(kube::Error::Api(r)) => Some(r),
+            _ => None,
+        };
+        let text = match api {
+            Some(r) if !r.message.is_empty() => r.message.clone(),
+            Some(r) => format!("{} ({})", r.reason, r.code),
+            None => cause.to_string(),
+        };
+        if !parts.iter().any(|p| p.contains(&text)) {
+            parts.push(text);
+        }
+        if api.is_some() {
+            break;
+        }
+    }
+    parts.join(": ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kube::core::ErrorResponse;
+
+    #[test]
+    fn error_text_uses_the_api_message_and_drops_repeats() {
+        let api: anyhow::Error = kube::Error::Api(ErrorResponse {
+            status: "Failure".into(),
+            message: "pods \"x\" not found".into(),
+            reason: "NotFound".into(),
+            code: 404,
+        })
+        .into();
+        assert_eq!(
+            error_text(&api.context("describe pod/x")),
+            "describe pod/x: pods \"x\" not found"
+        );
+        let io = anyhow::Error::from(std::io::Error::other("no such file"))
+            .context("failed to read kubeconfig: no such file")
+            .context("cannot read kubeconfig /k");
+        assert_eq!(
+            error_text(&io),
+            "cannot read kubeconfig /k: failed to read kubeconfig: no such file"
+        );
+    }
 }

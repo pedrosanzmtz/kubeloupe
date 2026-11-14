@@ -1,6 +1,6 @@
 import { expect } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
-import type { DetailState, ResourceRow, WatchBatch, WatchState } from "../../lib/bindings";
+import type { DetailState, Overview_Serialize, ResourceRow, WatchBatch, WatchState } from "../../lib/bindings";
 import type { CallArgs, CommandName, FakeApi } from "../fake-backend";
 import type { FakeCluster } from "../fixtures/cluster";
 
@@ -72,6 +72,22 @@ export class Fake {
 
   emitDetail(state: DetailState & { id?: string }): Promise<void> {
     return this.page.evaluate((s) => window.__fake.emitDetail(s), state);
+  }
+
+  lastOverviewId(): Promise<number | null> {
+    return this.page.evaluate(() => window.__fake.lastOverviewId());
+  }
+
+  overviewFeeds(): Promise<number[]> {
+    return this.page.evaluate(() => window.__fake.overviewFeeds());
+  }
+
+  emitOverview(change: Partial<Overview_Serialize>, id?: number): Promise<void> {
+    return this.page.evaluate(([c, i]) => window.__fake.emitOverview(c, i), [change, id] as const);
+  }
+
+  emitOverviewState(state: WatchState & { id?: number }): Promise<void> {
+    return this.page.evaluate((s) => window.__fake.emitOverviewState(s), state);
   }
 
   emitLogLines(lines: string[], streamId?: number): Promise<void> {
