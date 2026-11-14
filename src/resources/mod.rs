@@ -11,16 +11,20 @@
 //! - `jsonpath`: the small JSONPath the columns are written in
 //! - `discovery`: API discovery, access checks, resolving a kind by name
 //! - `ops`: list / get / YAML get and apply / delete
+//! - `manifests`, `apply`: create or update objects from a manifest file
 //! - `detail`: the detail panel for any kind
 //! - `table`: `kubectl get`-style table output for the CLI
 
+mod apply;
 mod columns;
 mod detail;
 mod discovery;
 mod jsonpath;
+mod manifests;
 mod ops;
 mod table;
 
+pub use apply::{apply_manifests, cli_apply, ApplyResult, ApplyStatus, ManifestOptions};
 pub use columns::make_row;
 pub use detail::get_resource_detail;
 pub use discovery::{can_list, check_access, discover, resolve_kind};

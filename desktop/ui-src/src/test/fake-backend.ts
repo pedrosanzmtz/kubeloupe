@@ -31,8 +31,8 @@
 
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { commands, events } from "../lib/bindings";
-import type { ResourceKind, ResourceRef, ResourceRow, WatchBatch, WatchState } from "../lib/bindings";
-import { defaultCluster } from "./fixtures/cluster";
+import type { ApplyResult, ResourceKind, ResourceRef, ResourceRow, WatchBatch, WatchState } from "../lib/bindings";
+import { defaultCluster, makeRow } from "./fixtures/cluster";
 import type { FakeCluster } from "./fixtures/cluster";
 
 type Commands = typeof commands;
@@ -125,6 +125,77 @@ export function installFakeBackend(cluster: FakeCluster = defaultCluster()): Fak
     if (row.namespace) lines.push(`  namespace: ${row.namespace}`);
     if (r.kind === "Secret") lines.push("type: Opaque", "data:", "  password: <hidden>");
     return lines.join("\n") + "\n";
+  }
+
+  /** Add (or replace) a row and tell the watches of its kind. */
+  function addRow(kind: ResourceKind, row: ResourceRow) {
+    cluster.rows[kind.id] = [...rowsOf(kind).filter((r) => r.key !== row.key), row];
+    for (const w of watches) {
+      if (w.kind.id === kind.id && (!w.namespace || w.namespace === row.namespace)) {
+        void events.watchBatch.emit({ id: w.id, snapshot: false, applied: [row], deleted: [] });
+      }
+    }
+  }
+
+  /**
+   * A small stand-in for `apply_manifests`: documents split at `---`, the
+   * identity read with regexes (block style, as the templates are written).
+   */
+  function applyManifests(yaml: string, namespace: string, dryRun: boolean, skipInvalid: boolean): ApplyResult[] {
+    const field = (doc: string, re: RegExp) => re.exec(doc)?.[1]?.trim() ?? "";
+    const docs: { line: number; text: string }[] = [];
+    let start = 1;
+    let cur: string[] = [];
+    yaml.split("\n").forEach((l, i) => {
+      if (/^---(\s|$)/.test(l)) {
+        docs.push({ line: start, text: cur.join("\n") });
+        cur = [];
+        start = i + 2;
+      } else cur.push(l);
+    });
+    docs.push({ line: start, text: cur.join("\n") });
+    const planned = docs
+      .filter((d) => d.text.split("\n").some((l) => l.trim() && !l.trim().startsWith("#")))
+      .map((d, i) => {
+        const apiVersion = field(d.text, /^apiVersion:(.*)$/m);
+        const kindName = field(d.text, /^kind:(.*)$/m);
+        const name = field(d.text, /^ {2}name:(.*)$/m);
+        const kind = cluster.kinds.find(
+          (k) =>
+            k.resource.kind === kindName &&
+            (k.resource.group ? `${k.resource.group}/${k.resource.version}` : k.resource.version) === apiVersion,
+        );
+        const ns = kind?.resource.namespaced ? field(d.text, /^ {2}namespace:(.*)$/m) || namespace || "default" : "";
+        const exists = kind ? rowsOf(kind).some((r) => r.key === rowKey(ns, name)) : false;
+        const error = !kind
+          ? `the cluster does not serve ${kindName} in ${apiVersion}`
+          : (cluster.applyErrors[name] ?? "");
+        const result: ApplyResult = {
+          document: i + 1,
+          line: d.line,
+          api_version: apiVersion,
+          kind: kindName,
+          name,
+          namespace: ns,
+          status: error ? "failed" : exists ? "unchanged" : "created",
+          message: error,
+          takeovers: [],
+        };
+        return { result, kind };
+      });
+    const failed = planned.filter((p) => p.result.status === "failed").length;
+    if (dryRun) return planned.map((p) => p.result);
+    if (failed && !skipInvalid) {
+      return planned.map((p) =>
+        p.result.status === "failed"
+          ? p.result
+          : { ...p.result, status: "skipped" as const, message: `not applied: ${failed} document(s) failed validation` },
+      );
+    }
+    for (const p of planned) {
+      if (p.kind && p.result.status === "created") addRow(p.kind, makeRow(cluster.kinds, p.kind.id, p.result.namespace, p.result.name, {}, Math.floor(Date.now() / 1000)));
+    }
+    return planned.map((p) => p.result);
   }
 
   /** Set `metadata.resourceVersion` the way the server reports it (after name / namespace). */
@@ -242,6 +313,7 @@ export function installFakeBackend(cluster: FakeCluster = defaultCluster()): Fak
       cluster.nextTakeovers = [];
       return { outcome: "applied", takeovers: took };
     },
+    cmdApplyManifests: (yaml, namespace, dryRun, skipInvalid) => applyManifests(yaml, namespace, dryRun, skipInvalid),
     cmdDeleteResource: (resource, namespace, name) => {
       const { kind, row } = findRow(resource, namespace, name);
       removeRow(kind, row.key);
