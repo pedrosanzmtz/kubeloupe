@@ -53,9 +53,16 @@ export const commands = {
 	/**
 	 *  Usage for what is on screen: pod metrics in `namespace` (`null` = all
 	 *  namespaces), or node metrics (`namespace` is ignored). The other list
-	 *  is empty.
+	 *  is empty. Each call also records the usage history (#47).
 	 */
 	cmdGetMetrics: (namespace: string | null, what: MetricsKind, options?: InvokeOptions) => __TAURI_INVOKE<MetricsSnapshot>("cmd_get_metrics", { namespace, what }, options),
+	/**
+	 *  The usage history of one pod (`namespace` set) or node, for the charts in
+	 *  its detail panel, with its requests and limits or allocatable. Polled
+	 *  while the panel is open: when no table has sampled the object lately, it
+	 *  samples it itself, so history keeps growing with only the panel open.
+	 */
+	cmdUsageHistory: (what: MetricsKind, namespace: string | null, name: string, options?: InvokeOptions) => __TAURI_INVOKE<UsageHistoryView>("cmd_usage_history", { what, namespace, name }, options),
 	/**
 	 *  Start watching a kind (in `namespace`, if it is namespaced). Returns the
 	 *  watch id carried by the `watch-batch` / `watch-state` events.
@@ -357,6 +364,18 @@ export type ContainerDetail = {
 };
 
 export type ContainerKind = "init" | "regular" | "ephemeral";
+
+/**  One container's samples (pods only). */
+export type ContainerSeries = {
+	name: string,
+	samples: UsageSample[],
+};
+
+export type ContainerUsage = {
+	name: string,
+	cpu_millicores: number,
+	memory_bytes: number,
+};
 
 export type ContextInfo = ContextInfo_Serialize | ContextInfo_Deserialize;
 
@@ -705,6 +724,13 @@ export type MetricsSnapshot = {
 	available: boolean,
 	pods: PodUsage[],
 	nodes: NodeUsage[],
+	/**
+	 *  Sparklines of the pods or nodes above, keyed like the table rows
+	 *  (`namespace/name`, or the node name).
+	 */
+	sparks: { [key in string]: Spark },
+	/**  Epoch ms of their oldest recorded sample (0 = none yet). */
+	since: number,
 };
 
 export type MountInfo = {
@@ -929,6 +955,8 @@ export type PodUsage = {
 	name: string,
 	cpu_millicores: number,
 	memory_bytes: number,
+	/**  Per-container usage; the pod's numbers are their sum. */
+	containers: ContainerUsage[],
 };
 
 export type PortInfo = {
@@ -1098,6 +1126,14 @@ export type SecretKey = {
 	bytes: number,
 };
 
+/**  The full history of one pod or node, oldest sample first. */
+export type SeriesView = {
+	/**  Epoch ms of the oldest sample still kept (0 = none yet). */
+	since: number,
+	samples: UsageSample[],
+	containers: ContainerSeries[],
+};
+
 /**  One port of a Service, for the UI's per-port Forward buttons. */
 export type ServicePortInfo = {
 	/**  Empty when the port has no name. */
@@ -1178,6 +1214,12 @@ export type Settings_Serialize = {
 	kinds: { [key in string]: KindSettings_Serialize },
 };
 
+/**  A downsampled series for a table cell's sparkline. */
+export type Spark = {
+	cpu: number[],
+	memory: number[],
+};
+
 /**  A container state (current or last). `state` is empty when there is none. */
 export type StateInfo = {
 	/**  `running`, `waiting`, `terminated`, or empty. */
@@ -1200,6 +1242,31 @@ export type TaggedLine = {
 export type Theme = 
 /**  Follow the system's light or dark preference. */
 "system" | "dark" | "light";
+
+export type UsageHistoryView = {
+	history: SeriesView,
+	reference: UsageReference,
+};
+
+/**
+ *  What usage is compared against. 0 = not set (no request, no limit, or
+ *  not a pod / node).
+ */
+export type UsageReference = {
+	cpu_request: number,
+	cpu_limit: number,
+	memory_request: number,
+	memory_limit: number,
+	cpu_allocatable: number,
+	memory_allocatable: number,
+};
+
+/**  One sample: epoch milliseconds, millicores and bytes. */
+export type UsageSample = {
+	t: number,
+	cpu_millicores: number,
+	memory_bytes: number,
+};
 
 /**
  *  One coalesced set of table rows for the watch `id`: the first batch is a

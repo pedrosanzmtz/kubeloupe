@@ -18,6 +18,7 @@ import type {
   ResourceRow,
   ServicePortInfo,
   StateInfo,
+  UsageHistoryView,
 } from "../../lib/bindings";
 import { defaultSettings } from "../../lib/settings";
 import type { Settings } from "../../lib/settings";
@@ -25,6 +26,7 @@ import { DISCOVERED } from "./discover";
 import { relatedFixtures } from "./related";
 import { defaultHelm } from "./helm";
 import type { FakeHelm } from "./helm";
+import { sparkFixtures, usageFixtures } from "./usage";
 
 export interface FakeCluster {
   contexts: ContextInfo_Serialize[];
@@ -75,6 +77,8 @@ export interface FakeCluster {
    * sessionStorage, so they survive a page reload (an app restart).
    */
   settings: Settings;
+  /** What `cmd_usage_history` returns, by `pods|namespace/name` or `nodes|name` (default: no history). */
+  usage: Record<string, UsageHistoryView>;
 }
 
 /** Unix seconds, a fixed distance in the past so ages are stable. */
@@ -335,11 +339,14 @@ export function defaultCluster(): FakeCluster {
       },
       notes: [],
     },
+    usage: usageFixtures(),
     metrics: {
       available: true,
+      sparks: sparkFixtures(),
+      since: Date.now() - 11 * 20_000,
       pods: [
-        { namespace: "demo", name: "web-1", cpu_millicores: 250, memory_bytes: 64 * 1024 * 1024 },
-        { namespace: "demo", name: "web-2", cpu_millicores: 1500, memory_bytes: 1536 * 1024 * 1024 },
+        { namespace: "demo", name: "web-1", cpu_millicores: 250, memory_bytes: 64 * 1024 * 1024, containers: [] },
+        { namespace: "demo", name: "web-2", cpu_millicores: 1500, memory_bytes: 1536 * 1024 * 1024, containers: [] },
       ],
       nodes: [
         {

@@ -8,6 +8,7 @@
   import MetaSection from "./MetaSection.svelte";
   import PortForward from "./PortForward.svelte";
   import RelatedGroups from "./RelatedGroups.svelte";
+  import UsageCharts from "./UsageCharts.svelte";
   import YamlEditor from "./YamlEditor.svelte";
   import { closeDetail } from "../stores/detail.svelte";
   import { openDockTab } from "../stores/dock.svelte";
@@ -100,6 +101,8 @@
         <dt>Service acct</dt>
         <dd>{extras.service_account || "—"}</dd>
       </MetaSection>
+
+      <UsageCharts what="pods" namespace={target.namespace} name={target.name} />
 
       <h3>Containers</h3>
       {#each extras.containers as c (c.kind + "/" + c.name)}

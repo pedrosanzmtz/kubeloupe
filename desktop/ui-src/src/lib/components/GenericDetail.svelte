@@ -9,6 +9,7 @@
   import RelatedGroups from "./RelatedGroups.svelte";
   import YamlEditor from "./YamlEditor.svelte";
   import ServicePorts from "./ServicePorts.svelte";
+  import UsageCharts from "./UsageCharts.svelte";
   import { isWorkloadResource } from "../dock";
   import { closeDetail } from "../stores/detail.svelte";
   import { openDockTab } from "../stores/dock.svelte";
@@ -97,6 +98,9 @@
       {:else}
         {#if hasRelated}<KindSummary {related} />{/if}
         <MetaSection {info} />
+        {#if target.resource.group === "" && target.resource.kind === "Node"}
+          <UsageCharts what="nodes" namespace={null} name={target.name} />
+        {/if}
         {#if target.resource.group === "" && target.resource.kind === "Service"}
           <ServicePorts namespace={target.namespace} name={target.name} disabled={live.deleted} />
         {/if}

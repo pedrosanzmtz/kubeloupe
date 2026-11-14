@@ -16,6 +16,8 @@ mod overview;
 mod pods;
 mod portforward;
 mod shell_kubeconfig;
+mod usage_history;
+mod usage_reference;
 
 pub mod actions;
 pub mod auth;
@@ -37,4 +39,6 @@ pub use overview::*;
 pub use pods::*;
 pub use portforward::*;
 pub use shell_kubeconfig::*;
+pub use usage_history::*;
+pub use usage_reference::*;
 pub use workload_logs::*;

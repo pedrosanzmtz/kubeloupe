@@ -27,7 +27,7 @@ const row = (cells: string[], extra: Partial<ResourceRow> = {}): ResourceRow => 
 });
 
 const metrics: Metrics = {
-  pods: new Map([["demo/web-1", { namespace: "demo", name: "web-1", cpu_millicores: 250, memory_bytes: 64 * 1024 ** 2 }]]),
+  pods: new Map([["demo/web-1", { namespace: "demo", name: "web-1", cpu_millicores: 250, memory_bytes: 64 * 1024 ** 2, containers: [] }]]),
   nodes: new Map([
     [
       "node-1",
@@ -40,6 +40,11 @@ const metrics: Metrics = {
       },
     ],
   ]),
+  sparks: new Map([
+    ["demo/web-1", { cpu: [100, 250], memory: [1, 2] }],
+    ["node-1", { cpu: [900, 1500], memory: [3, 4] }],
+  ]),
+  since: 1000,
 };
 const ctx: Ctx = { metrics, now: 0 };
 
@@ -101,6 +106,10 @@ describe("columnsFor", () => {
     const other = row(["", ""], { key: "demo/other" });
     expect(cpu.text(other, ctx)).toBe("—");
     expect(cpu.sort(other, ctx)).toBe(-1);
+    expect(cpu.spark?.(row(["", ""]), ctx)).toEqual([100, 250]);
+    expect(mem.spark?.(row(["", ""]), ctx)).toEqual([1, 2]);
+    // No history yet: no sparkline.
+    expect(cpu.spark?.(other, ctx)).toEqual([]);
     expect(cpu.text(row(["", ""]), { metrics: EMPTY_METRICS, now: 0 })).toBe("—");
   });
 
@@ -119,6 +128,8 @@ describe("columnsFor", () => {
     // Capacity 0 means unknown: no "/ ..." part.
     expect(mem.text(node, ctx)).toBe("1Gi");
     expect(mem.sort(node, ctx)).toBe(1024 ** 3);
+    expect(cpu.spark?.(node, ctx)).toEqual([900, 1500]);
+    expect(mem.spark?.(node, ctx)).toEqual([3, 4]);
   });
 
   it("tells pods and nodes apart from other kinds", () => {

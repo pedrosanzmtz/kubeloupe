@@ -2,6 +2,8 @@
   import { onMount } from "svelte";
   import VirtualList from "./VirtualList.svelte";
   import ContextMenu from "./ContextMenu.svelte";
+  import Sparkline from "./Sparkline.svelte";
+  import { clockTime } from "../usage";
   import type { MenuItem } from "./ContextMenu.svelte";
   import { replicasFromRow } from "../actions";
   import { rangeKeys } from "../selection";
@@ -320,8 +322,14 @@
               />
             </div>
             {#each columns as col (col.key)}
-              <div class="td {col.cls?.(entry.row) ?? ''}" role="gridcell" title={col.text(entry.row, { metrics, now })}>
-                {col.text(entry.row, { metrics, now })}
+              {@const text = col.text(entry.row, { metrics, now })}
+              {@const spark = col.spark?.(entry.row, { metrics, now })}
+              <div
+                class="td {col.cls?.(entry.row) ?? ''}"
+                role="gridcell"
+                title={spark && spark.length > 1 ? `${text}, trend since ${clockTime(metrics.since)}` : text}
+              >
+                {text}{#if spark}<Sparkline values={spark} />{/if}
               </div>
             {/each}
           </div>

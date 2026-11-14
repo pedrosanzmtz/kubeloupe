@@ -47,6 +47,7 @@ import type {
 import { defaultCluster, detail, makeRow, NO_POD } from "./fixtures/cluster";
 import { NO_RELATED } from "./fixtures/related";
 import { helmGet, helmList, helmRollback, helmUninstall } from "./fixtures/helm";
+import { NO_REFERENCE } from "./fixtures/usage";
 import type { FakeCluster } from "./fixtures/cluster";
 
 type Commands = typeof commands;
@@ -318,9 +319,18 @@ export function installFakeBackend(cluster: FakeCluster = defaultCluster()): Fak
     },
     cmdGetMetrics: (namespace, what) => {
       const m = cluster.metrics;
-      return what === "pods"
-        ? { available: m.available, pods: m.pods.filter((p) => !namespace || p.namespace === namespace), nodes: [] }
-        : { available: m.available, pods: [], nodes: m.nodes };
+      const pods = what === "pods" ? m.pods.filter((p) => !namespace || p.namespace === namespace) : [];
+      const nodes = what === "nodes" ? m.nodes : [];
+      // Like the backend: the sparklines of just what was returned.
+      const keys = [...pods.map((p) => `${p.namespace}/${p.name}`), ...nodes.map((n) => n.name)];
+      const sparks = Object.fromEntries(keys.filter((k) => k in m.sparks).map((k) => [k, m.sparks[k]]));
+      return { available: m.available, pods, nodes, sparks, since: keys.some((k) => k in m.sparks) ? m.since : 0 };
+    },
+    cmdUsageHistory: (what, namespace, name) => {
+      const key = what === "pods" ? `pods|${namespace}/${name}` : `nodes|${name}`;
+      return (
+        cluster.usage[key] ?? { history: { since: 0, samples: [], containers: [] }, reference: copy(NO_REFERENCE) }
+      );
     },
 
     cmdWatchStart: (resource, namespace) => {
