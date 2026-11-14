@@ -87,8 +87,8 @@ test("a problem pod opens in the Pods view", async ({ page }) => {
   await page.getByRole("region", { name: "Problem pods" }).getByRole("button", { name: "demo/crashed" }).click();
   await expect(page.getByRole("navigation").getByRole("button", { name: "Pods", exact: true })).toHaveClass(/active/);
   await expect
-    .poll(async () => (await fake.calls("cmdGetPodDetails")).at(-1))
-    .toEqual({ namespace: "demo", name: "crashed" });
+    .poll(async () => (await fake.calls("cmdGetResourceDetail")).at(-1))
+    .toEqual({ resource: expect.objectContaining({ kind: "Pod" }), namespace: "demo", name: "crashed" });
 });
 
 test("warnings come first and link to their objects", async ({ page }) => {
