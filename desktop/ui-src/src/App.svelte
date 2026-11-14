@@ -14,6 +14,8 @@
   import TableView from "./lib/components/TableView.svelte";
   import DetailPanel from "./lib/components/DetailPanel.svelte";
   import GenericDetail from "./lib/components/GenericDetail.svelte";
+  import PortForwards from "./lib/components/PortForwards.svelte";
+  import { PORT_FORWARDS_VIEW } from "./lib/forwards";
   import Dock from "./lib/components/Dock.svelte";
   import { dock } from "./lib/stores/dock.svelte";
   import { isPod } from "./lib/columns";
@@ -68,7 +70,7 @@
 <div class="main" class:hidden={dock.maximized}>
   <Sidebar />
   <section class="content">
-    {#if app.view !== "overview"}
+    {#if app.view !== "overview" && app.view !== PORT_FORWARDS_VIEW}
       <Toolbar />
     {/if}
     <ErrorBanner />
@@ -77,6 +79,8 @@
       <!-- Restoring the remembered context and namespaces. -->
     {:else if app.view === "overview"}
       <Overview />
+    {:else if app.view === PORT_FORWARDS_VIEW}
+      <PortForwards />
     {:else if kind}
       {#key kind.id}
         <TableView {kind} />
