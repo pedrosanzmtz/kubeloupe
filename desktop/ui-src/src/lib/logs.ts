@@ -1,4 +1,15 @@
 /** Lines kept per stream; older ones fall off the front. */
+/** A workload whose pods' logs are merged into one stream. */
+export interface WorkloadRef {
+  /** Deployment, StatefulSet, DaemonSet, Job or ReplicaSet (case-insensitive; `deploy`, `sts`, `ds` also work). */
+  kind: string;
+  namespace: string;
+  name: string;
+}
+
+/** Kinds whose pods' logs can be streamed together. */
+export const WORKLOAD_KINDS = ["Deployment", "StatefulSet", "DaemonSet", "Job", "ReplicaSet"];
+
 export const LOG_BUFFER_MAX = 50_000;
 
 /** Where a line of a workload stream came from. */

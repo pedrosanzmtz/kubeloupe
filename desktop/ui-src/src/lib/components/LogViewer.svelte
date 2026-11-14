@@ -8,10 +8,9 @@
   import { commands, events } from "../bindings";
   import type { LogContainer, WorkloadNotice } from "../bindings";
   import { LogBuffer, LOG_BUFFER_MAX, linePrefix, logMatches, podColor, splitHighlights } from "../logs";
-  import type { TaggedText } from "../logs";
+  import type { TaggedText, WorkloadRef } from "../logs";
   import { detail } from "../stores/detail.svelte";
   import type { PodRef } from "../stores/detail.svelte";
-  import type { WorkloadRef } from "../stores/workloadLogs.svelte";
 
   interface Props {
     /** Single-pod mode: the pod whose logs to show. */
@@ -373,14 +372,19 @@
     unlisteners.forEach((f) => f());
     cancelAnimationFrame(raf);
     clearTimeout(filterTimer);
+    const ownStream = streamId;
     streamId = ++streamCounter;
+    if (isWorkload) {
+      // Stops our stream only: a viewer that replaced it keeps its own.
+      commands.cmdStopWorkloadLogs(ownStream).catch(() => {});
+      return;
+    }
     // When another pod replaced this one, its stream start already stops ours;
     // stopping here could race with it and kill the new stream. Decide after
     // the current update has settled: during teardown `detail.pod` may still
     // hold the previous value.
-    // Workload streams are stopped by whoever closes the viewer.
     queueMicrotask(() => {
-      if (!isWorkload && !detail.pod) commands.cmdStopPodLogs().catch(() => {});
+      if (!detail.pod) commands.cmdStopPodLogs().catch(() => {});
     });
   });
 </script>
