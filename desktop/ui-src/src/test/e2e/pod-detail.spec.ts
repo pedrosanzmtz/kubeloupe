@@ -142,3 +142,28 @@ test("closing the panel stops the log stream", async ({ page }) => {
   await expect(panel(page)).toHaveCount(0);
   await expect.poll(() => fake.calls("cmdStopPodLogs")).toHaveLength(1);
 });
+
+test("the table header stays out of the open panel at 1280x800", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await openPod(page);
+  const table = page.getByTestId("resource-table");
+  const box = (await panel(page).boundingBox())!;
+  const grid = (await table.getByRole("grid").boundingBox())!;
+  // The table, which clips its header and rows, ends where the panel starts.
+  expect(grid.x + grid.width).toBeLessThanOrEqual(box.x);
+  // Columns that do not fit run on under the panel: what is drawn there must
+  // be the panel, not the header labels (#57).
+  const underPanel = await table.getByRole("columnheader").evaluateAll(
+    (ths, left) =>
+      ths.flatMap((th) => {
+        const r = th.getBoundingClientRect();
+        const x = Math.max(r.left, left) + 4;
+        if (x >= r.right) return [];
+        const hit = document.elementFromPoint(x, r.top + r.height / 2);
+        return [{ label: th.textContent?.trim(), panelOnTop: !!hit?.closest("aside") }];
+      }),
+    box.x,
+  );
+  expect(underPanel.length).toBeGreaterThan(0);
+  expect(underPanel.filter((h) => !h.panelOnTop)).toEqual([]);
+});
