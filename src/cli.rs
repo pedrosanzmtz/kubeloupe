@@ -3,7 +3,7 @@
 use crate::{
     exec_command, format_cpu, format_memory, get_namespaces, get_node_metrics, get_nodes,
     get_pod_logs, get_pod_metrics, get_pods, resources, stream_pod_logs, watch, ForwardStatus,
-    ForwardTarget, LogOptions, PodUsage, PortForward, PortSpec,
+    ForwardTarget, LogOptions, PortForward, PortSpec,
 };
 use anyhow::{Context, Result};
 use kube::Client;
@@ -75,12 +75,10 @@ pub async fn print_pod_logs(
 // ---------------------------------------------------------------------------
 
 /// Print `kubectl top pods`-style usage (CLI output), optionally for one
-/// namespace.
+/// namespace. The namespace is queried directly (not filtered from a
+/// cluster-wide list), so it works for users limited to that namespace.
 pub async fn print_top_pods(client: &Client, namespace: Option<&str>) -> Result<()> {
-    let usages = get_pod_metrics(client)
-        .await?
-        .map(|all| filter_namespace(all, namespace));
-    match usages {
+    match get_pod_metrics(client, namespace).await? {
         None => {
             anyhow::bail!(
                 "Metrics API not available on this cluster (is metrics-server installed?)"
@@ -103,14 +101,6 @@ pub async fn print_top_pods(client: &Client, namespace: Option<&str>) -> Result<
         }
     }
     Ok(())
-}
-
-/// Keep the pod usages of `namespace` (all of them for `None`).
-fn filter_namespace(usages: Vec<PodUsage>, namespace: Option<&str>) -> Vec<PodUsage> {
-    match namespace {
-        Some(ns) => usages.into_iter().filter(|u| u.namespace == ns).collect(),
-        None => usages,
-    }
 }
 
 /// Print `kubectl top nodes`-style usage (CLI output).

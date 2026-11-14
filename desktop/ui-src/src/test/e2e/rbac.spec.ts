@@ -12,7 +12,19 @@ const limited = (cluster: import("../fixtures/cluster").FakeCluster) => {
   cluster.overview = {
     namespaces: null,
     nodes: null,
-    pods: { namespace: "team-a", total: 1, running: 1, pending: 0, failed: 0, by_namespace: [["team-a", 1]] },
+    pods: {
+      namespace: "team-a",
+      total: 1,
+      running: 1,
+      pending: 0,
+      succeeded: 0,
+      failed: 0,
+      waiting_errors: 0,
+      by_namespace: [["team-a", 1]],
+      problems: [],
+      problems_total: 0,
+    },
+    capacity: null,
     events: { namespace: "team-a", items: [] },
     notes: [
       "Pods: showing namespace team-a only (not allowed across all namespaces)",
@@ -80,5 +92,5 @@ test("the overview shows what is allowed, with notes", async ({ page }) => {
   await expect(page.getByText("Pods in team-a")).toBeVisible();
   await expect(page.getByText("Nodes ready")).toHaveCount(0);
   await expect(page.getByText("1 pods", { exact: true })).toBeVisible();
-  await expect(page.locator("header")).toContainText("Connected");
+  await expect(page.locator("header")).toContainText("Live");
 });

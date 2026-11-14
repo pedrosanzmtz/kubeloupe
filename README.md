@@ -23,8 +23,10 @@ Svelte) and a CLI, both built on the same Rust core.
   polling, and stay smooth with thousands of rows. Filter by namespace and
   by text. Pods and Nodes show CPU/memory usage when the metrics API is
   available.
-- **Overview**: object counts, pods by namespace and recent events, refreshed
-  every 30 seconds.
+- **Overview**: pod counts (crash-looping pods count as errors, not as
+  running), problem pods, CPU/memory/pod capacity against requests and usage,
+  and the newest warning events, each linking to its object. Kept live by
+  watches, not by re-listing the cluster.
 - **Details** for any object. For pods: live logs (pick the container, or the
   previous instance of a crashed one) and an interactive terminal (pod exec).
 - **Port forwards** to pods, Services and workloads, on a chosen or automatic

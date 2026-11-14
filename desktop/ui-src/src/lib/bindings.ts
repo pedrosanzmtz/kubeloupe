@@ -39,17 +39,25 @@ export const commands = {
 	 */
 	cmdSaveLogs: (filename: string, content: string, options?: InvokeOptions) => __TAURI_INVOKE<string>("cmd_save_logs", { filename, content }, options),
 	/**
-	 *  The overview. Parts the user may not see cluster-wide are narrowed to
-	 *  `namespace` (`null` = the context's namespace) or left out.
+	 *  Start the overview feed `id` (chosen by the UI, so no event can arrive
+	 *  before it knows the id). Parts the user may not see cluster-wide fall
+	 *  back to `namespace` (`null` = the context's namespace). Replaces a feed
+	 *  with the same id.
 	 */
-	cmdGetOverview: (namespace: string | null, options?: InvokeOptions) => __TAURI_INVOKE<Overview_Serialize>("cmd_get_overview", { namespace }, options),
+	cmdOverviewStart: (id: number, namespace: string | null, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_overview_start", { id, namespace }, options),
+	cmdOverviewStop: (id: number, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_overview_stop", { id }, options),
 	/**
 	 *  The namespace to start on: `null` (all namespaces) if the user may list
 	 *  pods cluster-wide, otherwise the context's namespace or the first one
 	 *  they can access.
 	 */
 	cmdDefaultNamespace: (options?: InvokeOptions) => __TAURI_INVOKE<string | null>("cmd_default_namespace", undefined, options),
-	cmdGetMetrics: (options?: InvokeOptions) => __TAURI_INVOKE<MetricsSnapshot>("cmd_get_metrics", undefined, options),
+	/**
+	 *  Usage for what is on screen: pod metrics in `namespace` (`null` = all
+	 *  namespaces), or node metrics (`namespace` is ignored). The other list
+	 *  is empty.
+	 */
+	cmdGetMetrics: (namespace: string | null, what: MetricsKind, options?: InvokeOptions) => __TAURI_INVOKE<MetricsSnapshot>("cmd_get_metrics", { namespace, what }, options),
 	/**
 	 *  Start watching a kind (in `namespace`, if it is namespaced). Returns the
 	 *  watch id carried by the `watch-batch` / `watch-state` events.
@@ -73,11 +81,19 @@ export const commands = {
 	cmdExecResize: (session: string, cols: number, rows: number, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_exec_resize", { session, cols, rows }, options),
 	cmdExecClose: (session: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_exec_close", { session }, options),
 	/**
-	 *  Forward a pod port to localhost. Returns the session id and the local
-	 *  port the forward listens on.
+	 *  Start forwarding `remote_port` (a number or a port name) of a pod,
+	 *  Service or workload. `local_port`: none picks the remote port if it is
+	 *  free and at least 1024, else a random one; 0 is random; any other
+	 *  number is used as is or fails if taken. Asking again for a forward that
+	 *  already runs (same target and port, no explicit local port) returns it.
 	 */
-	cmdPortforwardStart: (namespace: string, name: string, port: number, options?: InvokeOptions) => __TAURI_INVOKE<PortForwardInfo>("cmd_portforward_start", { namespace, name, port }, options),
-	cmdPortforwardStop: (session: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_portforward_stop", { session }, options),
+	cmdPortforwardStart: (target: ForwardTarget, remotePort: string, localPort: number | null, options?: InvokeOptions) => __TAURI_INVOKE<ForwardInfo>("cmd_portforward_start", { target, remotePort, localPort }, options),
+	/**  Stop a forward. Stopping one that is already gone is not an error. */
+	cmdPortforwardStop: (id: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_portforward_stop", { id }, options),
+	/**  Every running forward, oldest first. */
+	cmdPortforwardList: (options?: InvokeOptions) => __TAURI_INVOKE<ForwardInfo[]>("cmd_portforward_list", undefined, options),
+	/**  The ports of a Service, for its per-port Forward buttons. */
+	cmdServicePorts: (namespace: string, name: string, options?: InvokeOptions) => __TAURI_INVOKE<ServicePortInfo[]>("cmd_service_ports", { namespace, name }, options),
 	/**  Detail of any object; pods include their `pod` section. */
 	cmdGetResourceDetail: (resource: ResourceRef, namespace: string, name: string, options?: InvokeOptions) => __TAURI_INVOKE<ResourceDetail>("cmd_get_resource_detail", { resource, namespace, name }, options),
 	/**  An object as YAML. Secret values stay hidden unless `reveal` is set. */
@@ -126,6 +142,8 @@ export const events = {
 	drainProgress: makeEvent<DrainProgress, DrainProgress>("drain-progress"),
 	execClosed: makeEvent<ExecClosed, ExecClosed>("exec-closed"),
 	execOutput: makeEvent<ExecOutput, ExecOutput>("exec-output"),
+	overviewState: makeEvent<OverviewStateChanged, OverviewStateChanged>("overview-state"),
+	overviewUpdate: makeEvent<OverviewChanged_Serialize, OverviewChanged_Deserialize>("overview-update"),
 	podLog: makeEvent<PodLog, PodLog>("pod-log"),
 	podLogDone: makeEvent<PodLogDone, PodLogDone>("pod-log-done"),
 	podLogError: makeEvent<PodLogError, PodLogError>("pod-log-error"),
@@ -156,14 +174,21 @@ export type ActionDef = {
 	input: ActionInput,
 };
 
-export type ActionId = "delete" | "forceDelete" | "scale" | "restart" | "cordon" | "uncordon" | "drain" | "trigger" | "suspend" | "resume";
+export type ActionId = "delete" | "forceDelete" | "scale" | "restart" | "cordon" | "uncordon" | "drain" | "trigger" | "suspend" | "resume" | 
+/**
+ *  Start a port-forward. Long-running, so the UI and the CLI handle it
+ *  themselves ([`crate::PortForward`]); [`run_action`] refuses it.
+ */
+"portForward";
 
 /**  An extra value the action needs before it can run. */
 export type ActionInput = 
 /**  Nothing more is needed. */
 "none" | 
 /**  A non-negative whole number of replicas. */
-"replicas";
+"replicas" | 
+/**  A remote port (number or name) and an optional local port. */
+"port";
 
 /**  What an apply did. */
 export type ApplyOutcome = 
@@ -221,6 +246,23 @@ export type BulkItemResult = {
 	key: string,
 	/**  Plain-words reason; empty when the delete was accepted. */
 	error: string,
+};
+
+/**  Requests and usage against what the nodes can allocate, like Lens. */
+export type Capacity = {
+	cpu_requests_millicores: number,
+	cpu_allocatable_millicores: number,
+	/**  0 unless `metrics`. */
+	cpu_usage_millicores: number,
+	memory_requests_bytes: number,
+	memory_allocatable_bytes: number,
+	/**  0 unless `metrics`. */
+	memory_usage_bytes: number,
+	/**  Whether usage came from the metrics API (metrics-server). */
+	metrics: boolean,
+	/**  Pods bound to a node that have not finished. */
+	pods: number,
+	pods_allocatable: number,
 };
 
 /**  Where a kind appears in the sidebar. */
@@ -352,12 +394,23 @@ export type EnvInfo = {
 	source: string,
 };
 
+/**  A warning event, linked to the object it is about. */
 export type EventInfo = {
+	/**  `namespace/name` of the event. */
+	key: string,
+	/**  The event type: `Warning` or `Normal`. */
 	kind: string,
 	reason: string,
 	message: string,
+	/**  `Kind/name` of the involved object, for display. */
 	object: string,
-	age: string,
+	object_api_version: string,
+	object_kind: string,
+	/**  Empty for cluster-scoped objects. */
+	object_namespace: string,
+	object_name: string,
+	/**  When it last happened (unix seconds), so a UI can show its age. */
+	time: number,
 	count: number,
 };
 
@@ -379,11 +432,55 @@ export type FieldTakeover = {
 	fields: string[],
 };
 
+/**  One running forward, with its live status. */
+export type ForwardInfo = {
+	id: string,
+	target: ForwardTarget,
+	/**  The remote port as asked for: a number or a port name. */
+	remote: string,
+	/**  Its number on the target (the Service port or the pod port). */
+	remote_port: number,
+	local_port: number,
+	/**  `http://127.0.0.1:<local_port>`. */
+	url: string,
+	/**  Epoch milliseconds. */
+	started_at: number,
+	status: ForwardStatus,
+};
+
+/**  The kind of object a forward points at. */
+export type ForwardKind = "pod" | "service" | "deployment" | "statefulSet" | "replicaSet" | "daemonSet";
+
+/**  Live state of a forward. */
+export type ForwardStatus = {
+	/**  The pod the last connection went to (empty before the first one). */
+	pod: string,
+	/**  Connections open right now. */
+	connections: number,
+	/**  Connections served since the start. */
+	total_connections: number,
+	/**
+	 *  What went wrong last, in plain words; empty once a later connection
+	 *  got an answer.
+	 */
+	last_error: string,
+};
+
+/**  The object a forward points at. */
+export type ForwardTarget = {
+	kind: ForwardKind,
+	namespace: string,
+	name: string,
+};
+
 /**  A container (regular or init) whose logs can be read. */
 export type LogContainer = {
 	name: string,
 	init: boolean,
 };
+
+/**  Which metrics a view shows. */
+export type MetricsKind = "pods" | "nodes";
 
 export type MetricsSnapshot = {
 	available: boolean,
@@ -434,6 +531,35 @@ export type ObjectId = {
 export type Overview = Overview_Serialize | Overview_Deserialize;
 
 /**
+ *  A new overview for the overview feed `id` (sent when it changed, at
+ *  most about once a second).
+ */
+export type OverviewChanged = OverviewChanged_Serialize | OverviewChanged_Deserialize;
+
+/**
+ *  A new overview for the overview feed `id` (sent when it changed, at
+ *  most about once a second).
+ */
+export type OverviewChanged_Deserialize = {
+	id: number,
+	overview: Overview_Deserialize,
+};
+
+/**
+ *  A new overview for the overview feed `id` (sent when it changed, at
+ *  most about once a second).
+ */
+export type OverviewChanged_Serialize = {
+	id: number,
+	overview: Overview_Serialize,
+};
+
+/**  Connection state of the overview feed `id`. */
+export type OverviewStateChanged = {
+	id: number,
+} & WatchState;
+
+/**
  *  The overview. Each part is computed on its own: a part the user may not
  *  see is `None`, with a line in `notes` saying why, so a user with access
  *  to only some namespaces still gets an overview.
@@ -442,6 +568,12 @@ export type Overview_Deserialize = {
 	namespaces?: number | null,
 	nodes?: NodeCounts | null,
 	pods?: PodCounts_Deserialize | null,
+	/**
+	 *  Only when both the nodes and the pods of the whole cluster are
+	 *  visible: requests in one namespace say nothing about the nodes.
+	 */
+	capacity?: Capacity | null,
+	/**  Warning events only. */
 	events?: RecentEvents_Deserialize | null,
 	/**  What is missing or narrowed, and why. */
 	notes: string[],
@@ -456,6 +588,12 @@ export type Overview_Serialize = {
 	namespaces: number | null,
 	nodes: NodeCounts | null,
 	pods: PodCounts_Serialize | null,
+	/**
+	 *  Only when both the nodes and the pods of the whole cluster are
+	 *  visible: requests in one namespace say nothing about the nodes.
+	 */
+	capacity: Capacity | null,
+	/**  Warning events only. */
 	events: RecentEvents_Serialize | null,
 	/**  What is missing or narrowed, and why. */
 	notes: string[],
@@ -468,10 +606,16 @@ export type OwnerLink = {
 	controller: boolean,
 };
 
-/**  Pod counts, across the cluster or in one namespace. */
+/**
+ *  Pod counts, across the cluster or in one namespace. A pod counts once:
+ *  a crash-looping pod is in `waiting_errors`, not `running`.
+ */
 export type PodCounts = PodCounts_Serialize | PodCounts_Deserialize;
 
-/**  Pod counts, across the cluster or in one namespace. */
+/**
+ *  Pod counts, across the cluster or in one namespace. A pod counts once:
+ *  a crash-looping pod is in `waiting_errors`, not `running`.
+ */
 export type PodCounts_Deserialize = {
 	/**
 	 *  The namespace these were narrowed to because listing pods across
@@ -481,11 +625,24 @@ export type PodCounts_Deserialize = {
 	total: number,
 	running: number,
 	pending: number,
+	succeeded: number,
 	failed: number,
+	/**
+	 *  A container waits for a reason other than starting up:
+	 *  CrashLoopBackOff, ImagePullBackOff, CreateContainerConfigError, ...
+	 */
+	waiting_errors: number,
 	by_namespace: ([string, number])[],
+	/**  The worst problem pods first, at most 50. */
+	problems: ProblemPod[],
+	/**  How many problem pods there are in all. */
+	problems_total: number,
 };
 
-/**  Pod counts, across the cluster or in one namespace. */
+/**
+ *  Pod counts, across the cluster or in one namespace. A pod counts once:
+ *  a crash-looping pod is in `waiting_errors`, not `running`.
+ */
 export type PodCounts_Serialize = {
 	/**
 	 *  The namespace these were narrowed to because listing pods across
@@ -495,8 +652,18 @@ export type PodCounts_Serialize = {
 	total: number,
 	running: number,
 	pending: number,
+	succeeded: number,
 	failed: number,
+	/**
+	 *  A container waits for a reason other than starting up:
+	 *  CrashLoopBackOff, ImagePullBackOff, CreateContainerConfigError, ...
+	 */
+	waiting_errors: number,
 	by_namespace: ([string, number])[],
+	/**  The worst problem pods first, at most 50. */
+	problems: ProblemPod[],
+	/**  How many problem pods there are in all. */
+	problems_total: number,
 };
 
 /**  Pod-only part of a [`super::ResourceDetail`]. */
@@ -544,11 +711,6 @@ export type PodUsage = {
 	memory_bytes: number,
 };
 
-export type PortForwardInfo = {
-	session: string,
-	local_port: number,
-};
-
 export type PortInfo = {
 	name: string,
 	port: number,
@@ -562,20 +724,38 @@ export type ProbeInfo = {
 	summary: string,
 };
 
-/**  Recent events, across the cluster or in one namespace. */
+/**
+ *  A pod worth looking at: a waiting error (CrashLoopBackOff, ...),
+ *  running but not ready, or pending for more than five minutes.
+ */
+export type ProblemPod = {
+	namespace: string,
+	name: string,
+	/**  As in the Pods table. */
+	status: string,
+	/**  Why it is listed: the status, "Not ready" or "Pending for 12m". */
+	reason: string,
+	restarts: number,
+	/**  Unix seconds. */
+	created: number,
+};
+
+/**  Warning events, across the cluster or in one namespace. */
 export type RecentEvents = RecentEvents_Serialize | RecentEvents_Deserialize;
 
-/**  Recent events, across the cluster or in one namespace. */
+/**  Warning events, across the cluster or in one namespace. */
 export type RecentEvents_Deserialize = {
 	/**  As in [`PodCounts::namespace`]. */
 	namespace?: string | null,
+	/**  Newest first. */
 	items: EventInfo[],
 };
 
-/**  Recent events, across the cluster or in one namespace. */
+/**  Warning events, across the cluster or in one namespace. */
 export type RecentEvents_Serialize = {
 	/**  As in [`PodCounts::namespace`]. */
 	namespace: string | null,
+	/**  Newest first. */
 	items: EventInfo[],
 };
 
@@ -656,6 +836,16 @@ export type SecretKey = {
 	key: string,
 	/**  Decoded size in bytes. */
 	bytes: number,
+};
+
+/**  One port of a Service, for the UI's per-port Forward buttons. */
+export type ServicePortInfo = {
+	/**  Empty when the port has no name. */
+	name: string,
+	port: number,
+	protocol: string,
+	/**  The `targetPort`: a number or a container port name. */
+	target_port: string,
 };
 
 /**  A container state (current or last). `state` is empty when there is none. */

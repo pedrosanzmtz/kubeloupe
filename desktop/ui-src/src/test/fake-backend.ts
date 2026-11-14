@@ -35,6 +35,7 @@ import type {
   ApplyResult,
   ForwardInfo,
   DetailState,
+  Overview_Serialize,
   ResourceKind,
   ResourceRef,
   ResourceRow,
@@ -76,6 +77,14 @@ export interface FakeApi {
   activeDetailWatches(): string[];
   /** Send a `detail-watch`; `id` defaults to the latest detail watch. */
   emitDetail(state: DetailState & { id?: string }): Promise<void>;
+  /** Id of the most recent overview feed (`cmd_overview_start`), or null. */
+  lastOverviewId(): number | null;
+  /** Ids of the overview feeds started and not stopped. */
+  overviewFeeds(): number[];
+  /** Merge `change` into `cluster.overview` and send it; `id` defaults to the latest feed. */
+  emitOverview(change: Partial<Overview_Serialize>, id?: number): Promise<void>;
+  /** Send an `overview-state`; `id` defaults to the latest feed. */
+  emitOverviewState(state: WatchState & { id?: number }): Promise<void>;
   /** Send `pod-log` lines; `streamId` defaults to the latest stream. */
   emitLogLines(lines: string[], streamId?: number): Promise<void>;
   /** Send `pod-log-error`, then (if `done`) `pod-log-done`. */
@@ -95,6 +104,8 @@ declare global {
 const toCamel = (cmd: string) => cmd.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase()) as CommandName;
 const sameResource = (a: ResourceRef, b: ResourceRef) =>
   a.group === b.group && a.version === b.version && a.kind === b.kind && a.plural === b.plural;
+/** A JSON copy, like an event payload over real IPC. */
+const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 const rowKey = (namespace: string, name: string) => (namespace ? `${namespace}/${name}` : name);
 
 export function installFakeBackend(cluster: FakeCluster = defaultCluster()): FakeApi {
@@ -108,6 +119,9 @@ export function installFakeBackend(cluster: FakeCluster = defaultCluster()): Fak
   let drainSeq = 0;
   let sessionSeq = 0;
   let streamId: number | null = null;
+  /** Running overview feeds, and the id of the latest one. */
+  const overviewFeeds = new Set<number>();
+  let lastOverview: number | null = null;
 
   function kindOf(resource: ResourceRef): ResourceKind {
     const kind = cluster.kinds.find((k) => sameResource(k.resource, resource));
@@ -257,8 +271,27 @@ export function installFakeBackend(cluster: FakeCluster = defaultCluster()): Fak
         const allowed = !cluster.denied.includes(id) && !(clusterWide && cluster.deniedClusterWide.includes(id));
         return { id, allowed };
       }),
-    cmdGetOverview: () => cluster.overview,
-    cmdGetMetrics: () => cluster.metrics,
+    cmdOverviewStart: (id) => {
+      overviewFeeds.add(id);
+      lastOverview = id;
+      // Like the backend: the first summary, then "live".
+      setTimeout(() => {
+        if (!overviewFeeds.has(id)) return;
+        void events.overviewUpdate.emit({ id, overview: copy(cluster.overview) });
+        void events.overviewState.emit({ id, state: "live" });
+      }, 0);
+      return null;
+    },
+    cmdOverviewStop: (id) => {
+      overviewFeeds.delete(id);
+      return null;
+    },
+    cmdGetMetrics: (namespace, what) => {
+      const m = cluster.metrics;
+      return what === "pods"
+        ? { available: m.available, pods: m.pods.filter((p) => !namespace || p.namespace === namespace), nodes: [] }
+        : { available: m.available, pods: [], nodes: m.nodes };
+    },
 
     cmdWatchStart: (resource, namespace) => {
       const kind = kindOf(resource);
@@ -335,7 +368,8 @@ export function installFakeBackend(cluster: FakeCluster = defaultCluster()): Fak
       cluster.forwards = cluster.forwards.filter((f) => f.id !== id);
       return null;
     },
-    cmdPortforwardList: () => cluster.forwards,
+    // A copy, like real IPC: the app must see a new list after the tests change this one.
+    cmdPortforwardList: () => JSON.parse(JSON.stringify(cluster.forwards)) as ForwardInfo[],
     cmdServicePorts: (namespace, name) => cluster.servicePorts[`${namespace}/${name}`] ?? [],
 
     cmdGetResourceDetail: (resource, namespace, name) => detailOf(resource, namespace, name),
@@ -449,6 +483,13 @@ export function installFakeBackend(cluster: FakeCluster = defaultCluster()): Fak
     lastDetailWatchId: () => (detailSeq ? `detail-${detailSeq}` : null),
     activeDetailWatches: () => [...detailWatches.keys()],
     emitDetail: (s) => events.detailWatch.emit({ ...s, id: s.id ?? api.lastDetailWatchId() ?? "" }),
+    lastOverviewId: () => lastOverview,
+    overviewFeeds: () => [...overviewFeeds],
+    emitOverview: (change, id) => {
+      Object.assign(cluster.overview, change);
+      return events.overviewUpdate.emit({ id: id ?? lastOverview ?? -1, overview: copy(cluster.overview) });
+    },
+    emitOverviewState: (s) => events.overviewState.emit({ ...s, id: s.id ?? lastOverview ?? -1 }),
     emitLogLines: (lines, id) => events.podLog.emit({ streamId: id ?? streamId ?? -1, data: lines }),
     opened: () => [...opened],
     emitLogEnd: async (error, done = true, id) => {

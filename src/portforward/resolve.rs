@@ -125,10 +125,9 @@ impl Resolver {
             Self::Workload { selector, remote } => {
                 let pods: Api<Pod> = Api::namespaced(client.clone(), namespace);
                 let list = pods.list(&ListParams::default().labels(selector)).await?;
-                let mut out: Vec<Backend> = list
-                    .items
+                let ready: Vec<&Pod> = list.items.iter().filter(|p| pod_is_ready(p)).collect();
+                let mut out: Vec<Backend> = ready
                     .iter()
-                    .filter(|p| pod_is_ready(p))
                     .filter_map(|p| {
                         Some(Backend {
                             pod: p.metadata.name.clone()?,
@@ -136,6 +135,9 @@ impl Resolver {
                         })
                     })
                     .collect();
+                if out.is_empty() && !ready.is_empty() {
+                    bail!("its ready pods have no port named '{remote}'");
+                }
                 out.sort_by(|a, b| a.pod.cmp(&b.pod));
                 Ok(out)
             }

@@ -99,7 +99,10 @@ impl PortForward {
             .await
             .map_err(|e| anyhow::anyhow!(describe_error(&e)))?;
         let ns = target.namespace.clone();
-        let backends = resolver.backends(client, &ns).await?;
+        let backends = resolver
+            .backends(client, &ns)
+            .await
+            .with_context(|| describe_target(&target))?;
         let Some(first) = backends.first().cloned() else {
             bail!("no ready pod backs {}", describe_target(&target));
         };
