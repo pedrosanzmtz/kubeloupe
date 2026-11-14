@@ -72,6 +72,14 @@ Svelte) and a CLI, both built on the same Rust core.
   Arrow keys or j/k move through the table, Enter opens, Space selects,
   Delete deletes, Shift+F10 opens the row menu, `/` focuses the filter and
   `?` lists every shortcut.
+- **Helm releases**: a Helm section lists releases with their chart, app
+  version, revision and status, read straight from the cluster (no `helm`
+  binary needed; the list reads only labels). The detail shows notes,
+  values (optionally merged with the chart defaults), the rendered manifest
+  (Secret values hidden until you reveal them), the revision history with a
+  diff of any two revisions, and the objects the release created. Rollback
+  and uninstall run the `helm` CLI (on `PATH`) against the same context, after
+  a confirmation.
 - **Multi-cluster**: switch between your kubeconfig contexts from the header.
 - **Remembers where you were**: the last context, and per context the view
   and namespaces; per kind the table sort and hidden columns (Columns
@@ -101,6 +109,8 @@ namespace; lists default to all namespaces.
 | `kubeloupe get <kind> [<name>] [-n NS] [-o FORMAT] [-l SEL] [--field-selector SEL]` | List any resource type, built-in or custom (`deploy`, `svc`, `widgets.example.com`), with the same columns as the app. `-o` is `table` (default), `wide` (adds labels, and IPs for pods and nodes), `yaml`, `json` or `name` (`deployment.apps/web`). Also `get <kind>/<name>` |
 | `kubeloupe describe <kind>/<name> [-n NS]` | Metadata, owners, labels and annotations, conditions, Secret keys (never values) and events of any object, like `kubectl describe` |
 | `kubeloupe yaml <kind>/<name> [-n NS] [--reveal]` | Print any object as YAML. Secret values are hidden unless `--reveal` is given (same for `get -o yaml\|json`). `yaml <pod>` is short for `yaml pod/<pod>` |
+| `kubeloupe helm list [-n NS]` | Helm releases with chart, app version, revision and status (all namespaces by default), read from the cluster without `helm` |
+| `kubeloupe helm get <release> [all\|values\|manifest\|notes\|history] [-n NS] [--revision N] [--all] [--reveal]` | One release: a summary with history and notes (default), its user values (`--all` merges the chart defaults), manifest (Secret values hidden unless `--reveal`), notes or revisions |
 | `kubeloupe completions <bash\|zsh\|fish\|powershell\|elvish>` | Print a shell completion script, e.g. `kubeloupe completions bash > ~/.local/share/bash-completion/completions/kubeloupe` |
 | `kubeloupe watch [<kind>] [-n NS]` | Print live changes to a resource type (default `pods`) until Ctrl-C |
 | `kubeloupe pods [-n NS]` | List pods (all namespaces by default) |
@@ -200,6 +210,10 @@ It creates `kubeloupe-test` (a control-plane node and a worker) with:
   the `web` (nginx) and `logger` deployments (the logger writes a line every
   2 s, handy for live logs), a two-container pod (`multi`), a crash-looping
   pod (`crashed`), and in `default` a pod that stays Pending (`hungry`)
+
+`scripts/test-cluster/charts/demo-chart` is a tiny local chart (a ConfigMap,
+a Secret and a Deployment) for the Helm tests, which install it in temporary
+namespaces with `helm`.
 
 Pass `--staging` to also create `kubeloupe-staging`, a single empty node, so
 the context switcher has a second cluster to switch to. Each kind cluster

@@ -1,7 +1,7 @@
 mod args;
 
 use anyhow::Result;
-use args::{Cli, Commands};
+use args::{Cli, Commands, HelmCommand};
 use clap::{CommandFactory, Parser};
 use kubeloupe::actions::{cli_action, cli_delete, cli_drain, ActionId, DrainOptions};
 use kubeloupe::{
@@ -271,6 +271,28 @@ async fn run(cli: Cli) -> Result<()> {
             namespace,
             image,
         } => kubeloupe::terminal::cli_node_shell(&client, &node, &namespace, &image).await?,
+        Commands::Helm { command } => match command {
+            HelmCommand::List { namespace } => {
+                kubeloupe::helm::print_helm_list(&client, namespace.as_deref()).await?
+            }
+            HelmCommand::Get {
+                release,
+                section,
+                namespace,
+                revision,
+                all,
+                reveal,
+            } => {
+                let opts = kubeloupe::helm::HelmGetOptions {
+                    namespace: namespace.unwrap_or_else(|| client.default_namespace().to_string()),
+                    revision,
+                    section,
+                    all_values: all,
+                    reveal,
+                };
+                kubeloupe::helm::print_helm_get(&client, &release, &opts).await?
+            }
+        },
         Commands::Exec {
             name,
             namespace,

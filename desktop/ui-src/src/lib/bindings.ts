@@ -171,6 +171,27 @@ export const commands = {
 	 *  how many were deleted; fails with the first error after trying them all.
 	 */
 	cmdNodeShellCleanup: (options?: InvokeOptions) => __TAURI_INVOKE<number>("cmd_node_shell_cleanup", undefined, options),
+	/**
+	 *  The releases in `namespaces` (empty = all), from labels only. Namespaces
+	 *  whose Secrets may not be listed come back as `warnings`.
+	 */
+	cmdHelmList: (namespaces: string[], options?: InvokeOptions) => __TAURI_INVOKE<HelmReleaseList>("cmd_helm_list", { namespaces }, options),
+	/**
+	 *  The chart of each given revision (a few payloads downloaded at a time),
+	 *  for the list's chart columns. Errors are per release.
+	 */
+	cmdHelmCharts: (keys: HelmRevisionKey[], options?: InvokeOptions) => __TAURI_INVOKE<HelmChartInfo[]>("cmd_helm_charts", { keys }, options),
+	/**
+	 *  One revision decoded (`revision` 0 = the newest). Secret values in the
+	 *  manifest are hidden unless `reveal`.
+	 */
+	cmdHelmGet: (namespace: string, name: string, revision: number, reveal: boolean, options?: InvokeOptions) => __TAURI_INVOKE<HelmRelease>("cmd_helm_get", { namespace, name, revision, reveal }, options),
+	/**  The installed helm's version; an error says how to install it. */
+	cmdHelmVersion: (options?: InvokeOptions) => __TAURI_INVOKE<string>("cmd_helm_version", undefined, options),
+	/**  `helm rollback <name> <revision>`; returns a short summary. */
+	cmdHelmRollback: (namespace: string, name: string, revision: number, options?: InvokeOptions) => __TAURI_INVOKE<string>("cmd_helm_rollback", { namespace, name, revision }, options),
+	/**  `helm uninstall <name>`; returns a short summary. */
+	cmdHelmUninstall: (namespace: string, name: string, options?: InvokeOptions) => __TAURI_INVOKE<string>("cmd_helm_uninstall", { namespace, name }, options),
 	/**  The settings, as loaded on start and changed since. */
 	cmdGetSettings: (options?: InvokeOptions) => __TAURI_INVOKE<Settings_Serialize>("cmd_get_settings", undefined, options),
 	/**
@@ -557,6 +578,106 @@ export type ForwardTarget = {
 	namespace: string,
 	name: string,
 };
+
+/**  The chart of one revision, for the list's chart columns. */
+export type HelmChartInfo = {
+	namespace: string,
+	name: string,
+	revision: number,
+	chart: string,
+	chart_version: string,
+	app_version: string,
+	/**  Why the payload could not be read; empty on success. */
+	error: string,
+};
+
+/**  One revision of a release, decoded. */
+export type HelmRelease = {
+	name: string,
+	namespace: string,
+	revision: number,
+	status: string,
+	storage: HelmStorage,
+	chart: string,
+	chart_version: string,
+	app_version: string,
+	description: string,
+	notes: string,
+	/**  As Helm stores them (RFC 3339); empty if unknown. */
+	first_deployed: string,
+	last_deployed: string,
+	/**  The user-supplied values as YAML; empty if there are none. */
+	values: string,
+	/**  The chart defaults with the user values on top, as YAML. */
+	computed_values: string,
+	/**  The rendered manifest; Secret values hidden unless revealed. */
+	manifest: string,
+	/**  Whether `manifest` has hidden Secret values. */
+	secrets_hidden: boolean,
+	resources: HelmResource[],
+	/**  Every stored revision, newest first. */
+	history: HelmRevision[],
+};
+
+/**
+ *  The releases in the asked namespaces, and the namespaces that could not
+ *  be read, in plain words.
+ */
+export type HelmReleaseList = {
+	/**  Sorted by namespace, then name. */
+	releases: HelmReleaseRow[],
+	warnings: string[],
+};
+
+/**  A release in a list: its newest revision and all revisions' labels. */
+export type HelmReleaseRow = {
+	name: string,
+	namespace: string,
+	revision: number,
+	status: string,
+	updated: number,
+	storage: HelmStorage,
+	/**  Every stored revision, newest first. */
+	history: HelmRevision[],
+};
+
+/**  One object of a release's manifest. */
+export type HelmResource = {
+	api_version: string,
+	kind: string,
+	/**
+	 *  As in the manifest, else the release's namespace (also for
+	 *  cluster-scoped kinds: callers that know the kind ignore it).
+	 */
+	namespace: string,
+	name: string,
+};
+
+/**  One revision, from its labels. */
+export type HelmRevision = {
+	revision: number,
+	/**  `deployed`, `superseded`, `failed`, `pending-upgrade`, ... */
+	status: string,
+	/**
+	 *  Unix seconds of the last change (the `modifiedAt` label, else the
+	 *  object's creation); 0 if unknown.
+	 */
+	updated: number,
+};
+
+/**  Which revision to fetch for [`release_charts`]. */
+export type HelmRevisionKey = {
+	namespace: string,
+	name: string,
+	revision: number,
+	storage: HelmStorage,
+};
+
+/**
+ *  Where a release is stored: Helm's default Secret driver or the
+ *  ConfigMap one.
+ */
+export type HelmStorage = "secret" | "configmap";
 
 /**  What is remembered per kind (by kind id). */
 export type KindSettings = KindSettings_Serialize | KindSettings_Deserialize;

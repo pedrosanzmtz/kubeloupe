@@ -62,6 +62,12 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::debug::cmd_node_shell_start,
             commands::debug::cmd_node_shell_leftovers,
             commands::debug::cmd_node_shell_cleanup,
+            commands::helm::cmd_helm_list,
+            commands::helm::cmd_helm_charts,
+            commands::helm::cmd_helm_get,
+            commands::helm::cmd_helm_version,
+            commands::helm::cmd_helm_rollback,
+            commands::helm::cmd_helm_uninstall,
             commands::settings::cmd_get_settings,
             commands::settings::cmd_update_settings
         ])

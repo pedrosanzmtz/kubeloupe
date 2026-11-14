@@ -1,0 +1,5 @@
+replicas: 1
+greeting: hello
+image: busybox:1.36
+# Rendered into a Secret, to test that manifests hide Secret values.
+password: not-a-real-secret

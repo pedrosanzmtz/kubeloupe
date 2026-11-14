@@ -3,6 +3,7 @@ import type { ContextInfo, NamespaceInfo, ResourceKind } from "../bindings";
 import { joinNames, normalizeNamespaces, sameNamespaces } from "../namespaces";
 import { clampHeight } from "../dock";
 import { PORT_FORWARDS_VIEW } from "../forwards";
+import { HELM_VIEW } from "../helm";
 import { contextToRestore, namespacesToRestore } from "../settings";
 import { closeDetail, detail, openDetail } from "./detail.svelte";
 import { checkLeftovers } from "./debug.svelte";
@@ -98,7 +99,7 @@ function restorePendingView() {
   const view = pendingView;
   pendingView = null;
   if (!view || view === "overview" || app.view !== "overview") return;
-  if (view === PORT_FORWARDS_VIEW) {
+  if (view === PORT_FORWARDS_VIEW || view === HELM_VIEW) {
     app.view = view;
     return;
   }
