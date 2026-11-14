@@ -132,6 +132,18 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Create or update objects from a YAML file (like kubectl apply -f)
+    Apply {
+        /// Manifest file, or `-` for stdin; may hold many documents
+        #[arg(short, long)]
+        file: String,
+        /// Namespace for objects that have none (default: the context's)
+        #[arg(short, long)]
+        namespace: Option<String>,
+        /// Validate on the server only; store nothing
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Print a pod as YAML
     Yaml {
         /// Pod name
@@ -312,6 +324,11 @@ async fn main() -> Result<()> {
             namespace,
             force,
         } => cli_delete(&client, &target, namespace.as_deref(), force).await?,
+        Commands::Apply {
+            file,
+            namespace,
+            dry_run,
+        } => kubeloupe::resources::cli_apply(&client, &file, namespace.as_deref(), dry_run).await?,
         Commands::Yaml { name, namespace } => {
             print_pod_yaml(&client, namespace.as_deref(), &name).await?
         }

@@ -90,6 +90,13 @@ export const commands = {
 	cmdApplyResourceYaml: (resource: ResourceRef, namespace: string, name: string, yaml: string, resourceVersion: string, dryRun: boolean, options?: InvokeOptions) => __TAURI_INVOKE<ApplyOutcome>("cmd_apply_resource_yaml", { resource, namespace, name, yaml, resourceVersion, dryRun }, options),
 	cmdDeleteResource: (resource: ResourceRef, namespace: string, name: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_delete_resource", { resource, namespace, name }, options),
 	/**
+	 *  Create or update the objects of a (multi-document) YAML manifest. The
+	 *  batch is validated with a dry run first; unless `dry_run`, it is applied
+	 *  if every document passed, or with `skip_invalid` the ones that did.
+	 *  Objects without a namespace go to `namespace` ("" = "default").
+	 */
+	cmdApplyManifests: (yaml: string, namespace: string, dryRun: boolean, skipInvalid: boolean, options?: InvokeOptions) => __TAURI_INVOKE<ApplyResult[]>("cmd_apply_manifests", { yaml, namespace, dryRun, skipInvalid }, options),
+	/**
 	 *  Run one action (everything except drain) on one object. Returns a short
 	 *  summary. The change reaches the table through the live watch. Errors are
 	 *  plain-words sentences ready to show inline.
@@ -170,6 +177,43 @@ export type ApplyOutcome =
  *  applied. `resource_version` is the object's current one.
  */
 { outcome: "conflict"; resource_version: string };
+
+/**  The result for one object of a manifest. */
+export type ApplyResult = {
+	/**  1-based position of its document in the file. */
+	document: number,
+	/**  1-based line its document starts on (for a YAML error: the error's line). */
+	line: number,
+	/**  Empty if the document could not be read. */
+	api_version: string,
+	kind: string,
+	name: string,
+	/**  Empty for cluster-scoped kinds. */
+	namespace: string,
+	status: ApplyStatus,
+	/**  Why it failed, was skipped or is pending; empty otherwise. */
+	message: string,
+	/**  Fields the apply took (or would take) over from other field managers. */
+	takeovers: FieldTakeover[],
+};
+
+/**  What happened to one object of a manifest. */
+export type ApplyStatus = 
+/**  It did not exist and was created (a dry run: would be). */
+"created" | 
+/**  It existed and changed. */
+"configured" | 
+/**  It existed and the apply changed nothing. */
+"unchanged" | 
+/**  The cluster rejected it, or the document could not be read. */
+"failed" | 
+/**  Not applied, because other documents failed validation. */
+"skipped" | 
+/**
+ *  A dry run could not check it yet: it needs a CRD or a namespace that
+ *  this same manifest creates.
+ */
+"pending";
 
 /**  Outcome of one object in a bulk delete. */
 export type BulkItemResult = {
