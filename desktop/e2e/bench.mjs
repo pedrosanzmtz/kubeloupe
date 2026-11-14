@@ -20,8 +20,12 @@ const URL = `http://localhost:${PORT}/bench.html`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function startVite() {
-  const proc = spawn("npx", ["vite", "--port", String(PORT), "--strictPort"], {
-    cwd: resolve(E2E_DIR, "../ui-src"),
+  // Vite's own entry rather than `npx vite`: killing npx would leave Vite
+  // running and holding our pipes open.
+  const ui = resolve(E2E_DIR, "../ui-src");
+  const vite = join(ui, "node_modules/vite/bin/vite.js");
+  const proc = spawn(process.execPath, [vite, "--port", String(PORT), "--strictPort"], {
+    cwd: ui,
     stdio: ["ignore", "pipe", "pipe"],
   });
   let out = "";
@@ -158,9 +162,14 @@ function report(s) {
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, md);
 }
 
-main().catch((e) => {
-  console.error(e);
-  const msg = `### Table benchmark\n\nCould not measure: \`${String(e.message ?? e).split("\n")[0]}\`\n`;
-  if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, msg);
-  process.exit(1);
-});
+// Exit explicitly: a leftover child (driver, webview, Vite) must not keep the
+// process, and so the CI step, alive.
+main().then(
+  () => process.exit(0),
+  (e) => {
+    console.error(e);
+    const msg = `### Table benchmark\n\nCould not measure: \`${String(e.message ?? e).split("\n")[0]}\`\n`;
+    if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, msg);
+    process.exit(1);
+  },
+);

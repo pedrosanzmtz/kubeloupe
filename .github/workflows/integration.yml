@@ -56,8 +56,6 @@ jobs:
     timeout-minutes: 25
     env:
       TAURI_DRIVER_VERSION: 2.1.0
-      # Software GL under Xvfb: the runners have no GPU.
-      LIBGL_ALWAYS_SOFTWARE: "1"
     steps:
       - uses: actions/checkout@v4.2.2
 
