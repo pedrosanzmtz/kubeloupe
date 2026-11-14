@@ -1,8 +1,12 @@
 import { commands } from "../bindings";
 import type { ContextInfo, NamespaceInfo, ResourceKind } from "../bindings";
 import { joinNames, normalizeNamespaces, sameNamespaces } from "../namespaces";
+import { clampHeight } from "../dock";
+import { PORT_FORWARDS_VIEW } from "../forwards";
+import { contextToRestore, namespacesToRestore } from "../settings";
 import { closeDetail, detail, openDetail } from "./detail.svelte";
-import { closeAllDockTabs } from "./dock.svelte";
+import { contextSettings, loadSettings, settings, updateContext, updateSettings } from "./settings.svelte";
+import { closeAllDockTabs, dock } from "./dock.svelte";
 import { whenDiscarded } from "./unsaved.svelte";
 
 /** `"overview"`, or the id of a discovered kind (`apps/v1/deployments`). */
@@ -36,7 +40,12 @@ export const app = $state({
   updated: "",
   /** Bumped by the Refresh button; views re-request their data on change. */
   refreshNonce: 0,
+  /** The remembered context and namespaces are restored (`startApp`). */
+  ready: false,
 });
+
+/** The view to open once discovery shows whether its kind still exists. */
+let pendingView: View | null = null;
 
 /** Discovery result (sidebar) and the kinds the user may not list. */
 class Kinds {
@@ -80,6 +89,20 @@ export async function loadKinds() {
   kinds.denied = new Set();
   kinds.loaded = true;
   await checkAccess();
+  restorePendingView();
+}
+
+/** Open the remembered view if its kind is still served and allowed. */
+function restorePendingView() {
+  const view = pendingView;
+  pendingView = null;
+  if (!view || view === "overview" || app.view !== "overview") return;
+  if (view === PORT_FORWARDS_VIEW) {
+    app.view = view;
+    return;
+  }
+  const kind = kinds.all.find((k) => k.id === view);
+  if (kind && (!kinds.denied.has(kind.id) || canOpenDenied(kind))) app.view = view;
 }
 
 /**
@@ -154,9 +177,6 @@ export async function loadContexts() {
   }
 }
 
-/** Typed namespaces, per context, for this session (persisting is #39). */
-const typedNamespaces = new Map<string, string[]>();
-
 function currentContextName(): string {
   return app.contexts.find((c) => c.current)?.name ?? "";
 }
@@ -166,7 +186,8 @@ export function rememberNamespace(ns: string) {
   if (!ns || app.knownNamespaces.includes(ns)) return;
   app.knownNamespaces = [...app.knownNamespaces, ns].sort();
   const ctx = currentContextName();
-  typedNamespaces.set(ctx, [...(typedNamespaces.get(ctx) ?? []), ns]);
+  const typed = contextSettings(ctx).typed_namespaces;
+  if (!typed.includes(ns)) updateContext(ctx, { typed_namespaces: [...typed, ns] });
 }
 
 export async function loadNamespaces() {
@@ -183,7 +204,7 @@ export async function loadNamespaces() {
   const ctx = app.contexts.find((c) => c.current);
   app.knownNamespaces = [];
   if (listed === null) {
-    for (const ns of [ctx?.namespace ?? "", ...(typedNamespaces.get(ctx?.name ?? "") ?? [])]) {
+    for (const ns of [ctx?.namespace ?? "", ...contextSettings(ctx?.name ?? "").typed_namespaces]) {
       if (ns && !app.knownNamespaces.includes(ns)) app.knownNamespaces.push(ns);
     }
     app.knownNamespaces.sort();
@@ -208,11 +229,50 @@ export async function initScope() {
   }
 }
 
+/**
+ * Restore what was remembered for the current context: its namespaces (or
+ * the default scope) now, its view once discovery has run.
+ */
+async function restoreScope() {
+  const saved = contextSettings(currentContextName());
+  const listed = app.namespaces.map((n) => n.name);
+  const namespaces = namespacesToRestore(saved.namespaces, listed, app.namespacesForbidden);
+  if (namespaces) app.selectedNamespaces = namespaces;
+  else await initScope();
+  pendingView = saved.view || null;
+}
+
+/**
+ * Start up: load the settings, switch to the remembered context if it still
+ * exists, and restore its namespaces and view.
+ */
+export async function startApp() {
+  await loadSettings();
+  // Leave room for the header and the tables, as a drag does.
+  const docked = settings.current.dock_height;
+  if (docked > 0) dock.height = clampHeight(docked, window.innerHeight - 160);
+  await loadContexts();
+  const remembered = contextToRestore(settings.current.last_context, app.contexts);
+  if (remembered) {
+    try {
+      await commands.cmdSetContext(remembered);
+      await loadContexts();
+    } catch {
+      // Stay on the kubeconfig's current-context.
+    }
+  }
+  await loadNamespaces();
+  await restoreScope();
+  app.ready = true;
+}
+
 /** Asks first if the detail panel has unsaved edits. */
 export function setView(view: View) {
   whenDiscarded(() => {
     closeDetail();
     app.view = view;
+    pendingView = null;
+    updateContext(currentContextName(), { view });
     app.count = "";
     app.updated = "";
     showError("");
@@ -235,9 +295,10 @@ export async function switchContext(name: string) {
   closeDetail();
   app.selectedNamespaces = [];
   app.view = "overview";
+  updateSettings({ last_context: name });
   await loadContexts();
   await loadNamespaces();
-  await initScope();
+  await restoreScope();
   refresh();
 }
 
@@ -253,6 +314,7 @@ export function setNamespaces(namespaces: readonly string[]) {
   const open = detail.target?.namespace;
   if (open && next.length > 0 && !next.includes(open)) closeDetail();
   app.selectedNamespaces = next;
+  updateContext(currentContextName(), { namespaces: next });
 }
 
 /** Show just `namespace` (`""`: all namespaces). */

@@ -17,6 +17,7 @@ import { unsaved } from "./unsaved.svelte";
 export const keyboard = $state({
   palette: false,
   help: false,
+  settings: false,
   /** Context menus open (they handle their own keys meanwhile). */
   menus: 0,
 });
@@ -85,6 +86,16 @@ export function closeHelp() {
   keyboard.help = false;
 }
 
+export function openSettings() {
+  keyboard.palette = false;
+  keyboard.help = false;
+  keyboard.settings = true;
+}
+
+export function closeSettings() {
+  keyboard.settings = false;
+}
+
 /** A menu or a dialog has the keyboard (each handles its own Esc). */
 function modalOpen(): boolean {
   return keyboard.menus > 0 || actionUi.request !== null || createUi.open || unsaved.asking;
@@ -115,12 +126,18 @@ export function handleKey(e: KeyboardEvent) {
     if (command === "escape" || command === "help") done(e, closeHelp);
     return;
   }
+  if (keyboard.settings) {
+    if (command === "escape" || command === "settings") done(e, closeSettings);
+    return;
+  }
 
   switch (command) {
     case "palette":
       return done(e, openPalette);
     case "help":
       return done(e, openHelp);
+    case "settings":
+      return done(e, openSettings);
     case "escape":
       if (detail.target) done(e, closeDetail);
       return;

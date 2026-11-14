@@ -10,6 +10,42 @@
   --green: #3fb27f;
   --red: #e5484d;
   --amber: #f5a524;
+  /* Error messages on the panel background. */
+  --error-text: #f5a3a5;
+}
+
+/* The Light theme (Settings → Theme). "System" leaves `data-theme` unset
+   and follows prefers-color-scheme. Keep both blocks the same. The log
+   viewer, terminal and YAML editor stay dark in both themes. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f5f6f8;
+  --bg-raised: #ffffff;
+  --bg-hover: #e9ecf1;
+  --border: #d5dae2;
+  --text: #1a1e25;
+  --text-muted: #5a6371;
+  --accent: #2b7de0;
+  --green: #1d8656;
+  --red: #cf3036;
+  --amber: #a8690c;
+  --error-text: #b4232a;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    color-scheme: light;
+    --bg: #f5f6f8;
+    --bg-raised: #ffffff;
+    --bg-hover: #e9ecf1;
+    --border: #d5dae2;
+    --text: #1a1e25;
+    --text-muted: #5a6371;
+    --accent: #2b7de0;
+    --green: #1d8656;
+    --red: #cf3036;
+    --amber: #a8690c;
+    --error-text: #b4232a;
+  }
 }
 
 * {
@@ -42,7 +78,7 @@ body {
 }
 
 .error-text {
-  color: #f5a3a5;
+  color: var(--error-text);
 }
 
 /* Form controls shared by the header, toolbar and panels. */

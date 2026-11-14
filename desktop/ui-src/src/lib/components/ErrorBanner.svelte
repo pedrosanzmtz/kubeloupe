@@ -13,6 +13,6 @@
     background: rgba(229, 72, 77, 0.15);
     border: 1px solid var(--red);
     border-radius: 6px;
-    color: #f5a3a5;
+    color: var(--error-text);
   }
 </style>

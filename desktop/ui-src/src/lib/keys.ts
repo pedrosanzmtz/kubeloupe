@@ -6,6 +6,7 @@
 export type Command =
   | "palette"
   | "help"
+  | "settings"
   | "focusFilter"
   | "rowDown"
   | "rowUp"
@@ -60,6 +61,7 @@ export const KEYMAP: Binding[] = [
     inInputs: true,
   },
   { command: "help", keys: [{ key: "?" }], label: "Show these shortcuts", group: "General" },
+  { command: "settings", keys: [{ key: ",", mod: true }], label: "Settings", group: "General", inInputs: true },
   {
     command: "escape",
     keys: [{ key: "Escape" }],

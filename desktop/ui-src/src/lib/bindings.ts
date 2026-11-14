@@ -153,6 +153,13 @@ export const commands = {
 	 *  stays cordoned.
 	 */
 	cmdCancelDrain: (drainId: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_cancel_drain", { drainId }, options),
+	/**  The settings, as loaded on start and changed since. */
+	cmdGetSettings: (options?: InvokeOptions) => __TAURI_INVOKE<Settings_Serialize>("cmd_get_settings", undefined, options),
+	/**
+	 *  Apply `patch` (fields left out are kept) and return the new settings.
+	 *  The file is written shortly after, once changes stop.
+	 */
+	cmdUpdateSettings: (patch: SettingsPatch_Deserialize, options?: InvokeOptions) => __TAURI_INVOKE<Settings_Serialize>("cmd_update_settings", { patch }, options),
 };
 
 /** Events */
@@ -365,6 +372,29 @@ export type ContextInfo_Serialize = {
 	namespace: string | null,
 };
 
+/**  What is remembered per kubeconfig context. */
+export type ContextSettings = ContextSettings_Serialize | ContextSettings_Deserialize;
+
+/**  What is remembered per kubeconfig context. */
+export type ContextSettings_Deserialize = {
+	/**  The last view: `"overview"` or a kind id (`apps/v1/deployments`). */
+	view?: string,
+	/**  The selected namespaces (empty: all namespaces). */
+	namespaces?: string[],
+	/**  Namespaces typed in by a user who may not list them. */
+	typed_namespaces?: string[],
+};
+
+/**  What is remembered per kubeconfig context. */
+export type ContextSettings_Serialize = {
+	/**  The last view: `"overview"` or a kind id (`apps/v1/deployments`). */
+	view: string,
+	/**  The selected namespaces (empty: all namespaces). */
+	namespaces: string[],
+	/**  Namespaces typed in by a user who may not list them. */
+	typed_namespaces: string[],
+};
+
 /**  What a detail watch reports. */
 export type DetailState = 
 /**  The object as it is now. */
@@ -510,6 +540,27 @@ export type ForwardTarget = {
 	name: string,
 };
 
+/**  What is remembered per kind (by kind id). */
+export type KindSettings = KindSettings_Serialize | KindSettings_Deserialize;
+
+/**  What is remembered per kind (by kind id). */
+export type KindSettings_Deserialize = {
+	/**  The column the table is sorted by (`""`: unsorted). */
+	sort_key?: string,
+	sort_desc?: boolean,
+	/**  Keys of the columns the user hid. */
+	hidden?: string[],
+};
+
+/**  What is remembered per kind (by kind id). */
+export type KindSettings_Serialize = {
+	/**  The column the table is sorted by (`""`: unsorted). */
+	sort_key: string,
+	sort_desc: boolean,
+	/**  Keys of the columns the user hid. */
+	hidden: string[],
+};
+
 /**
  *  A started local shell: its session id, and the context and namespace
  *  kubectl uses in it.
@@ -524,6 +575,25 @@ export type LocalShellStarted = {
 export type LogContainer = {
 	name: string,
 	init: boolean,
+};
+
+/**  Defaults of the log viewer's controls. */
+export type LogDefaults = LogDefaults_Serialize | LogDefaults_Deserialize;
+
+/**  Defaults of the log viewer's controls. */
+export type LogDefaults_Deserialize = {
+	/**  Lines to start with: a number, or `"all"`. */
+	tail?: string,
+	timestamps?: boolean,
+	wrap?: boolean,
+};
+
+/**  Defaults of the log viewer's controls. */
+export type LogDefaults_Serialize = {
+	/**  Lines to start with: a number, or `"all"`. */
+	tail: string,
+	timestamps: boolean,
+	wrap: boolean,
 };
 
 /**  Which metrics a view shows. */
@@ -953,6 +1023,76 @@ export type ServicePortInfo = {
 	target_port: string,
 };
 
+export type Settings = Settings_Serialize | Settings_Deserialize;
+
+/**
+ *  A change to the settings. Fields left out stay as they are; `contexts`
+ *  and `kinds` replace only the entries they name.
+ */
+export type SettingsPatch = SettingsPatch_Serialize | SettingsPatch_Deserialize;
+
+/**
+ *  A change to the settings. Fields left out stay as they are; `contexts`
+ *  and `kinds` replace only the entries they name.
+ */
+export type SettingsPatch_Deserialize = {
+	last_context?: string | null,
+	theme?: Theme | null,
+	logs?: LogDefaults_Deserialize | null,
+	check_updates?: boolean | null,
+	detail_width?: number | null,
+	dock_height?: number | null,
+	contexts?: { [key in string]: ContextSettings_Deserialize } | null,
+	kinds?: { [key in string]: KindSettings_Deserialize } | null,
+};
+
+/**
+ *  A change to the settings. Fields left out stay as they are; `contexts`
+ *  and `kinds` replace only the entries they name.
+ */
+export type SettingsPatch_Serialize = {
+	last_context?: string | null,
+	theme?: Theme | null,
+	logs?: LogDefaults_Serialize | null,
+	check_updates?: boolean | null,
+	detail_width?: number | null,
+	dock_height?: number | null,
+	contexts?: { [key in string]: ContextSettings_Serialize } | null,
+	kinds?: { [key in string]: KindSettings_Serialize } | null,
+};
+
+export type Settings_Deserialize = {
+	version?: number,
+	/**  The context to start in (`""`: the kubeconfig's current-context). */
+	last_context?: string,
+	theme?: Theme,
+	logs?: LogDefaults_Deserialize,
+	/**  Check for new releases on start (used by the update check, #30). */
+	check_updates?: boolean,
+	/**  Width of the detail panel in pixels. */
+	detail_width?: number,
+	/**  Height of the bottom dock in pixels (`0`: its default). */
+	dock_height?: number,
+	contexts?: { [key in string]: ContextSettings_Deserialize },
+	kinds?: { [key in string]: KindSettings_Deserialize },
+};
+
+export type Settings_Serialize = {
+	version: number,
+	/**  The context to start in (`""`: the kubeconfig's current-context). */
+	last_context: string,
+	theme: Theme,
+	logs: LogDefaults_Serialize,
+	/**  Check for new releases on start (used by the update check, #30). */
+	check_updates: boolean,
+	/**  Width of the detail panel in pixels. */
+	detail_width: number,
+	/**  Height of the bottom dock in pixels (`0`: its default). */
+	dock_height: number,
+	contexts: { [key in string]: ContextSettings_Serialize },
+	kinds: { [key in string]: KindSettings_Serialize },
+};
+
 /**  A downsampled series for a table cell's sparkline. */
 export type Spark = {
 	cpu: number[],
@@ -977,6 +1117,10 @@ export type TaggedLine = {
 	container: string,
 	line: string,
 };
+
+export type Theme = 
+/**  Follow the system's light or dark preference. */
+"system" | "dark" | "light";
 
 export type UsageHistoryView = {
 	history: SeriesView,

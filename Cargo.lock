@@ -2450,6 +2450,7 @@ dependencies = [
  "kubeloupe",
  "portable-pty",
  "serde",
+ "serde_json",
  "specta",
  "specta-typescript",
  "tauri",
