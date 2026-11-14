@@ -2,7 +2,9 @@
 //! `kubectl describe` prints an object.
 
 use crate::get::{object_namespace, resolve_kind_named};
-use crate::resources::{self, align_columns, ResourceDetail};
+use crate::resources::{
+    self, align_columns, ContainerDetail, ContainerKind, PodExtras, ResourceDetail, StateInfo,
+};
 use anyhow::Result;
 use kube::Client;
 use std::collections::BTreeMap;
@@ -55,6 +57,9 @@ pub fn render_describe(d: &ResourceDetail) -> String {
             .collect();
         field(&mut out, "Owners", &owners.join("\n"));
     }
+    if d.kind == "Pod" {
+        pod_section(&mut out, &d.pod);
+    }
     // Related objects (#35): add a "Related:" section here (selected pods,
     // services, mounted config) once `ResourceDetail` carries them.
     if !d.conditions.is_empty() {
@@ -96,6 +101,138 @@ pub fn render_describe(d: &ResourceDetail) -> String {
         section(&mut out, "Events", &table);
     }
     out
+}
+
+/// Pod status, placement and one block per container (env names only: the
+/// detail never carries values).
+fn pod_section(out: &mut String, p: &PodExtras) {
+    field(out, "Status", &none_if_empty(p.phase.clone()));
+    if !p.reason.is_empty() {
+        field(out, "Reason", &p.reason);
+    }
+    if !p.message.is_empty() {
+        field(out, "Message", &p.message);
+    }
+    field(out, "Node", &none_if_empty(p.node.clone()));
+    field(out, "IPs", &none_if_empty(p.pod_ips.join("\n")));
+    field(out, "Host IP", &none_if_empty(p.host_ip.clone()));
+    field(out, "QoS Class", &none_if_empty(p.qos_class.clone()));
+    if !p.priority_class.is_empty() {
+        field(out, "Priority Class", &p.priority_class);
+    }
+    field(
+        out,
+        "Service Account",
+        &none_if_empty(p.service_account.clone()),
+    );
+    for (kind, title) in [
+        (ContainerKind::Init, "Init Containers"),
+        (ContainerKind::Regular, "Containers"),
+        (ContainerKind::Ephemeral, "Ephemeral Containers"),
+    ] {
+        let containers: Vec<_> = p.containers.iter().filter(|c| c.kind == kind).collect();
+        if containers.is_empty() {
+            continue;
+        }
+        let _ = writeln!(out, "{title}:");
+        for c in containers {
+            let _ = writeln!(out, "  {}:", c.name);
+            let mut block = String::new();
+            container_fields(&mut block, c);
+            for line in block.lines() {
+                let _ = writeln!(out, "    {line}");
+            }
+        }
+    }
+}
+
+fn container_fields(out: &mut String, c: &ContainerDetail) {
+    field(out, "Image", &c.image);
+    field(out, "State", &state_text(&c.state));
+    if !c.last_state.state.is_empty() {
+        field(out, "Last State", &state_text(&c.last_state));
+    }
+    field(out, "Ready", if c.ready { "True" } else { "False" });
+    field(out, "Restarts", &c.restarts.to_string());
+    field(out, "Requests", &pairs(&c.requests));
+    field(out, "Limits", &pairs(&c.limits));
+    if !c.ports.is_empty() {
+        let ports: Vec<_> = c
+            .ports
+            .iter()
+            .map(|p| {
+                let name = if p.name.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", p.name)
+                };
+                format!("{}/{}{name}", p.port, p.protocol)
+            })
+            .collect();
+        field(out, "Ports", &ports.join("\n"));
+    }
+    for probe in &c.probes {
+        field(out, &capitalized(&probe.kind), &probe.summary);
+    }
+    if !c.mounts.is_empty() {
+        let mounts: Vec<_> = c
+            .mounts
+            .iter()
+            .map(|m| {
+                let sub = if m.sub_path.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (path {})", m.sub_path)
+                };
+                let ro = if m.read_only { " (ro)" } else { "" };
+                format!("{} from {}{sub}{ro}", m.path, m.name)
+            })
+            .collect();
+        field(out, "Mounts", &mounts.join("\n"));
+    }
+    let env: Vec<_> = c
+        .env
+        .iter()
+        .map(|e| {
+            if e.source.is_empty() {
+                e.name.clone()
+            } else {
+                format!("{} ({})", e.name, e.source)
+            }
+        })
+        .collect();
+    field(out, "Environment", &none_if_empty(env.join("\n")));
+}
+
+/// `Running, started 15h ago`, `Waiting: CrashLoopBackOff`,
+/// `Terminated: Error (exit code 1), 5m ago`, then the message if any.
+fn state_text(s: &StateInfo) -> String {
+    if s.state.is_empty() {
+        return "<none>".into();
+    }
+    let mut text = capitalized(&s.state);
+    if !s.reason.is_empty() {
+        text = format!("{text}: {}", s.reason);
+    }
+    if s.state == "terminated" {
+        text = format!("{text} (exit code {})", s.exit_code);
+    }
+    if !s.since.is_empty() {
+        let verb = if s.state == "running" { "started " } else { "" };
+        text = format!("{text}, {verb}{} ago", s.since);
+    }
+    if !s.message.is_empty() {
+        text = format!("{text}\n{}", s.message);
+    }
+    text
+}
+
+fn capitalized(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
 }
 
 /// `Label:   value`, continuation lines of a multi-line value indented under
@@ -161,7 +298,9 @@ fn created_text(secs: i64, age: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::resources::{ConditionInfo, OwnerLink, RelatedEvent, SecretKey};
+    use crate::resources::{
+        ConditionInfo, EnvInfo, OwnerLink, PortInfo, ProbeInfo, RelatedEvent, SecretKey,
+    };
 
     fn detail() -> ResourceDetail {
         ResourceDetail {
@@ -196,6 +335,54 @@ mod tests {
                 count: 3,
                 age: "2m".into(),
             }],
+            pod: PodExtras {
+                phase: "Pending".into(),
+                qos_class: "Burstable".into(),
+                service_account: "default".into(),
+                containers: vec![ContainerDetail {
+                    name: "hungry".into(),
+                    kind: ContainerKind::Regular,
+                    image: "nginx:1.27".into(),
+                    image_id: String::new(),
+                    state: StateInfo {
+                        state: "waiting".into(),
+                        reason: "ContainerCreating".into(),
+                        ..StateInfo::default()
+                    },
+                    last_state: StateInfo {
+                        state: "terminated".into(),
+                        reason: "Error".into(),
+                        exit_code: 1,
+                        since: "5m".into(),
+                        ..StateInfo::default()
+                    },
+                    ready: false,
+                    restarts: 2,
+                    requests: BTreeMap::from([("memory".into(), "100Gi".into())]),
+                    limits: BTreeMap::new(),
+                    ports: vec![PortInfo {
+                        name: "http".into(),
+                        port: 80,
+                        protocol: "TCP".into(),
+                    }],
+                    probes: vec![ProbeInfo {
+                        kind: "liveness".into(),
+                        summary: "http-get :80/ delay=0s".into(),
+                    }],
+                    mounts: vec![],
+                    env: vec![
+                        EnvInfo {
+                            name: "MODE".into(),
+                            source: String::new(),
+                        },
+                        EnvInfo {
+                            name: "PASSWORD".into(),
+                            source: "secret:creds/pw".into(),
+                        },
+                    ],
+                }],
+                ..PodExtras::default()
+            },
         }
     }
 
@@ -214,6 +401,25 @@ Labels:         app=hungry
 Annotations:    <none>
 Finalizers:     <none>
 Controlled By:  ReplicaSet/web-1
+Status:         Pending
+Node:           <none>
+IPs:            <none>
+Host IP:        <none>
+QoS Class:      Burstable
+Service Account: default
+Containers:
+  hungry:
+    Image:          nginx:1.27
+    State:          Waiting: ContainerCreating
+    Last State:     Terminated: Error (exit code 1), 5m ago
+    Ready:          False
+    Restarts:       2
+    Requests:       memory=100Gi
+    Limits:         <none>
+    Ports:          80/TCP (http)
+    Liveness:       http-get :80/ delay=0s
+    Environment:    MODE
+                    PASSWORD (secret:creds/pw)
 Conditions:
   Type          Status  Reason         Age  Message
   PodScheduled  False   Unschedulable  15h  0/2 nodes are available
@@ -228,6 +434,7 @@ Events:
     fn secret_keys_without_values_and_no_events() {
         let mut d = detail();
         d.kind = "Secret".into();
+        d.pod = PodExtras::default();
         d.owners.clear();
         d.conditions.clear();
         d.events.clear();

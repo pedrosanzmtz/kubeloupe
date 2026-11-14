@@ -123,6 +123,8 @@ fn cli_describe_shows_failed_scheduling() {
     assert!(out.starts_with("Name:           hungry\n"), "{out}");
     assert!(out.contains("PodScheduled  False"), "{out}");
     assert!(out.contains("FailedScheduling"), "{out}");
+    assert!(out.contains("Containers:\n  hungry:\n    Image:"), "{out}");
+    assert!(out.contains("memory=100Gi"), "requests shown: {out}");
 }
 
 #[test]
