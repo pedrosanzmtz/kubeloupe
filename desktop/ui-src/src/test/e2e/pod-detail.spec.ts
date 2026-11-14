@@ -104,6 +104,9 @@ test("stream end and errors are shown as system lines", async ({ page }) => {
   const fake = await openPod(page);
   await expect.poll(() => fake.calls("cmdStreamPodLogs")).toHaveLength(1);
   await fake.emitLogLines(["last words"]);
+  // Log lines are flushed on the next animation frame while system lines are
+  // appended at once, so wait for the line before ending the stream.
+  await expect(logLines(page)).toHaveText(["last words"]);
   await page.evaluate(() => window.__fake.emitLogEnd("container not found"));
   await expect(logLines(page)).toHaveText(["last words", "container not found", "[stream ended]"]);
 });
