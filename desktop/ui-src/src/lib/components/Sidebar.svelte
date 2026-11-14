@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Category, ResourceKind } from "../bindings";
-  import { app, kinds, setView } from "../stores/app.svelte";
+  import { app, canOpenDenied, deniedReason, kinds, setView } from "../stores/app.svelte";
 
   const SECTIONS: { category: Category; title: string }[] = [
     { category: "workloads", title: "Workloads" },
@@ -35,7 +35,7 @@
   const other = $derived(byGroup("other"));
 
   function open(kind: ResourceKind) {
-    if (!kinds.denied.has(kind.id)) setView(kind.id);
+    if (!kinds.denied.has(kind.id) || canOpenDenied(kind)) setView(kind.id);
   }
 </script>
 
@@ -45,8 +45,8 @@
     type="button"
     class:active={app.view === kind.id}
     class:denied
-    aria-disabled={denied}
-    title={denied ? "You are not allowed to list " + kind.label : kind.resource.kind}
+    aria-disabled={denied && !canOpenDenied(kind)}
+    title={denied ? deniedReason(kind) : kind.resource.kind}
     onclick={() => open(kind)}
   >
     {kind.label}
@@ -152,5 +152,9 @@
   button.denied:hover {
     background: transparent;
     color: var(--text-muted);
+  }
+  /* Denied across all namespaces only: opens, to pick a namespace there. */
+  button.denied[aria-disabled="false"] {
+    cursor: pointer;
   }
 </style>

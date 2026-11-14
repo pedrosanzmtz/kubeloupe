@@ -23,6 +23,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::logs::cmd_stop_workload_logs,
             commands::logs::cmd_save_logs,
             commands::cluster::cmd_get_overview,
+            commands::cluster::cmd_default_namespace,
             commands::cluster::cmd_get_metrics,
             commands::watch::cmd_watch_start,
             commands::watch::cmd_watch_stop,

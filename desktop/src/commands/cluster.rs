@@ -6,8 +6,8 @@ use crate::state::{
 };
 use kubeloupe::resources::{self, AccessResult, ResourceKind, ResourceRef};
 use kubeloupe::{
-    get_namespaces, get_node_metrics, get_overview, get_pod_metrics, list_contexts, ContextInfo,
-    NamespaceInfo, NodeUsage, Overview, PodUsage,
+    default_namespace, get_node_metrics, get_overview, get_pod_metrics, list_contexts,
+    list_namespaces_if_allowed, ContextInfo, NamespaceInfo, NodeUsage, Overview, PodUsage,
 };
 use serde::Serialize;
 use specta::Type;
@@ -15,18 +15,41 @@ use tauri::State;
 
 #[tauri::command]
 #[specta::specta]
+/// The cluster's namespaces, or `null` if the user may not list them (the
+/// UI then lets them type one).
 pub(crate) async fn cmd_list_namespaces(
     state: State<'_, AppState>,
-) -> Result<Vec<NamespaceInfo>, String> {
+) -> Result<Option<Vec<NamespaceInfo>>, String> {
     let client = client(&state).await?;
-    get_namespaces(&client).await.map_err(|e| e.to_string())
+    list_namespaces_if_allowed(&client)
+        .await
+        .map_err(|e| e.to_string())
 }
 
+/// The namespace to start on: `null` (all namespaces) if the user may list
+/// pods cluster-wide, otherwise the context's namespace or the first one
+/// they can access.
 #[tauri::command]
 #[specta::specta]
-pub(crate) async fn cmd_get_overview(state: State<'_, AppState>) -> Result<Overview, String> {
+pub(crate) async fn cmd_default_namespace(
+    state: State<'_, AppState>,
+) -> Result<Option<String>, String> {
     let client = client(&state).await?;
-    get_overview(&client).await.map_err(|e| e.to_string())
+    Ok(default_namespace(&client).await)
+}
+
+/// The overview. Parts the user may not see cluster-wide are narrowed to
+/// `namespace` (`null` = the context's namespace) or left out.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn cmd_get_overview(
+    state: State<'_, AppState>,
+    namespace: Option<String>,
+) -> Result<Overview, String> {
+    let client = client(&state).await?;
+    get_overview(&client, namespace.as_deref())
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -63,15 +86,17 @@ pub(crate) async fn cmd_discover(state: State<'_, AppState>) -> Result<Vec<Resou
     Ok(kinds)
 }
 
-/// Which of the kinds the current user may list.
+/// Which of the kinds the current user may list in `namespace` (`null` =
+/// across all namespaces; ignored for cluster-scoped kinds).
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn cmd_check_access(
     state: State<'_, AppState>,
     kinds: Vec<ResourceRef>,
+    namespace: Option<String>,
 ) -> Result<Vec<AccessResult>, String> {
     let client = client(&state).await?;
-    Ok(resources::check_access(&client, &kinds).await)
+    Ok(resources::check_access(&client, &kinds, namespace.as_deref()).await)
 }
 
 #[tauri::command]

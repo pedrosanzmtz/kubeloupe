@@ -180,35 +180,52 @@ fn title_case(s: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Which of `kinds` the current user may list (cluster-wide for namespaced
-/// kinds), via SelfSubjectAccessReview. A check that cannot be made counts as
+/// Whether the current user may `list` `resource` in `group`, in
+/// `namespace` (`None` = across all namespaces, or a cluster-scoped kind),
+/// via a SelfSubjectAccessReview. A check that cannot be made counts as
 /// allowed, so a restrictive cluster never hides everything.
-pub async fn check_access(client: &Client, kinds: &[ResourceRef]) -> Vec<AccessResult> {
+pub async fn can_list(
+    client: &Client,
+    group: &str,
+    resource: &str,
+    namespace: Option<&str>,
+) -> bool {
     let api: Api<SelfSubjectAccessReview> = Api::all(client.clone());
+    let review = SelfSubjectAccessReview {
+        spec: SelfSubjectAccessReviewSpec {
+            resource_attributes: Some(ResourceAttributes {
+                verb: Some("list".into()),
+                group: Some(group.to_string()),
+                resource: Some(resource.to_string()),
+                namespace: namespace.map(str::to_string),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    match api.create(&Default::default(), &review).await {
+        Ok(res) => res.status.map(|s| s.allowed).unwrap_or(true),
+        Err(_) => true,
+    }
+}
+
+/// Which of `kinds` the current user may list in the given scope: in
+/// `namespace` if one is given, otherwise across all namespaces. The
+/// namespace is ignored for cluster-scoped kinds. A check that cannot be
+/// made counts as allowed.
+pub async fn check_access(
+    client: &Client,
+    kinds: &[ResourceRef],
+    namespace: Option<&str>,
+) -> Vec<AccessResult> {
     futures::stream::iter(kinds.iter().cloned())
-        .map(|r| {
-            let api = api.clone();
-            async move {
-                let review = SelfSubjectAccessReview {
-                    spec: SelfSubjectAccessReviewSpec {
-                        resource_attributes: Some(ResourceAttributes {
-                            verb: Some("list".into()),
-                            group: Some(r.group.clone()),
-                            resource: Some(r.plural.clone()),
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                };
-                let allowed = match api.create(&Default::default(), &review).await {
-                    Ok(res) => res.status.map(|s| s.allowed).unwrap_or(true),
-                    Err(_) => true,
-                };
-                AccessResult {
-                    id: r.id(),
-                    allowed,
-                }
+        .map(|r| async move {
+            let ns = if r.namespaced { namespace } else { None };
+            let allowed = can_list(client, &r.group, &r.plural, ns).await;
+            AccessResult {
+                id: r.id(),
+                allowed,
             }
         })
         .buffer_unordered(16)

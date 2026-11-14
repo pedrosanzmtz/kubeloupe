@@ -75,6 +75,8 @@ fn kubeconfig_has_proxy(kubeconfig: &kube::config::Kubeconfig, context: Option<&
 pub struct ContextInfo {
     pub name: String,
     pub current: bool,
+    /// The context's default namespace (`contexts[].context.namespace`).
+    pub namespace: Option<String>,
 }
 
 /// List the contexts in the kubeconfig and which one is current.
@@ -87,6 +89,7 @@ pub async fn list_contexts() -> Result<Vec<ContextInfo>> {
         .map(|c| ContextInfo {
             name: c.name.clone(),
             current: c.name == current,
+            namespace: c.context.as_ref().and_then(|ctx| ctx.namespace.clone()),
         })
         .collect())
 }
