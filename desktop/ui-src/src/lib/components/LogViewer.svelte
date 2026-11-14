@@ -6,25 +6,35 @@
   import { onDestroy, onMount, tick } from "svelte";
   import VirtualList from "./VirtualList.svelte";
   import { commands, events } from "../bindings";
-  import type { LogContainer } from "../bindings";
-  import { LogBuffer, LOG_BUFFER_MAX, logMatches, splitHighlights } from "../logs";
+  import type { LogContainer, WorkloadNotice } from "../bindings";
+  import { LogBuffer, LOG_BUFFER_MAX, linePrefix, logMatches, podColor, splitHighlights } from "../logs";
+  import type { TaggedText } from "../logs";
   import { detail } from "../stores/detail.svelte";
   import type { PodRef } from "../stores/detail.svelte";
+  import type { WorkloadRef } from "../stores/workloadLogs.svelte";
 
   interface Props {
-    pod: PodRef;
-    /** Containers of the pod; the stream starts once `ready`. */
-    containers: LogContainer[];
-    ready: boolean;
+    /** Single-pod mode: the pod whose logs to show. */
+    pod?: PodRef;
+    /** Workload mode (instead of `pod`): merged logs of all its pods. */
+    workload?: WorkloadRef;
+    /** Containers of the pod; the stream starts once `ready`. Unused for workloads. */
+    containers?: LogContainer[];
+    ready?: boolean;
   }
 
-  let { pod, containers, ready }: Props = $props();
+  let { pod, workload, containers = [], ready = true }: Props = $props();
+  const isWorkload = $derived(workload !== undefined);
+  const title = $derived(workload ? `${workload.namespace}/${workload.name}` : "");
 
   interface Line {
     id: number;
     text: string;
     /** Set for system messages, which are not part of the buffer. */
     cls?: string;
+    /** Workload mode: the pod prefix and its colour. */
+    prefix?: string;
+    color?: string;
   }
 
   const LINE_HEIGHT = 18;
@@ -42,11 +52,19 @@
   let filter = $state("");
   let paused = $state(false);
   let statusNote = $state("");
+  // Workload mode: which pods/containers have been seen, and the pod filter.
+  let podFilter = $state("");
+  let podStates = $state<Record<string, "live" | "ended">>({});
+  let knownContainers = $state<string[]>([]);
+  let truncatedNote = $state("");
+  const containersByPod = new Map<string, Set<string>>();
+  let tagInfoCache = new Map<number, { prefix: string; lower: string; color: string }>();
 
   // The ring buffer and the lines waiting for the next frame live outside
   // reactive state; only the displayed lines are signalled, by `rev`.
   const buf = new LogBuffer();
   let pending: string[] = [];
+  let pendingTags: number[] = [];
   const d = { lines: [] as Line[] };
   let rev = $state(0);
   let lineCount = $state(0);
@@ -70,6 +88,7 @@
     void rev;
     return (i: number) => d.lines[i]?.id ?? i;
   });
+  const podNames = $derived(Object.keys(podStates).sort());
   const status = $derived(
     statusNote ||
       (paused ? "paused · " : "") + lineCount.toLocaleString() + (lineCount >= LOG_BUFFER_MAX ? "+" : "") + " lines",
@@ -99,14 +118,43 @@
     followIfNeeded(atBottom);
   }
 
+  /** Prefix, lowercase prefix (for filtering) and colour of a workload line's tag. */
+  function tagInfo(tagId: number) {
+    let info = tagInfoCache.get(tagId);
+    if (!info) {
+      const tag = buf.tags[tagId];
+      const multi = (containersByPod.get(tag.pod)?.size ?? 0) > 1;
+      const prefix = linePrefix(tag, multi);
+      info = { prefix, lower: prefix.toLowerCase(), color: podColor(tag.pod) };
+      tagInfoCache.set(tagId, info);
+    }
+    return info;
+  }
+
+  /** Whether a buffered line is shown under the pod filter and the text filter. */
+  function passes(text: string, tagId: number): boolean {
+    if (!tagId) return logMatches(text, filterLower);
+    if (podFilter && buf.tags[tagId].pod !== podFilter) return false;
+    // The filter also matches the pod (and container) name.
+    return !filterLower || tagInfo(tagId).lower.includes(filterLower) || logMatches(text, filterLower);
+  }
+
+  function makeLine(text: string, tagId: number): Line {
+    if (!tagId) return { id: nextLineId++, text };
+    const info = tagInfo(tagId);
+    return { id: nextLineId++, text, prefix: info.prefix, color: info.color };
+  }
+
   function flush() {
     raf = 0;
     if (paused || pending.length === 0) return;
     const lines = pending;
+    const tags = pendingTags;
     pending = [];
+    pendingTags = [];
     const atBottom = isAtBottom();
-    for (const text of lines) {
-      if (logMatches(text, filterLower)) d.lines.push({ id: nextLineId++, text });
+    for (let i = 0; i < lines.length; i++) {
+      if (passes(lines[i], tags[i])) d.lines.push(makeLine(lines[i], tags[i]));
     }
     if (d.lines.length > LOG_BUFFER_MAX + LOG_BUFFER_MAX / 10) {
       d.lines.splice(0, d.lines.length - LOG_BUFFER_MAX);
@@ -122,16 +170,76 @@
       updateStatus();
       return;
     }
-    for (const l of lines) pending.push(l);
+    for (const l of lines) {
+      pending.push(l);
+      pendingTags.push(0);
+    }
     if (!raf) raf = requestAnimationFrame(flush);
+  }
+
+  /** Remember a pod/container of a workload stream (for the pickers and prefixes). */
+  function notePod(podName: string, containerName: string, state: "live" | "ended" = "live") {
+    if (podStates[podName] !== state) podStates[podName] = state;
+    let set = containersByPod.get(podName);
+    if (!set) containersByPod.set(podName, (set = new Set()));
+    if (!set.has(containerName)) {
+      set.add(containerName);
+      if (set.size === 2) tagInfoCache = new Map(); // prefixes now include the container
+    }
+    if (containerName && !knownContainers.includes(containerName)) {
+      knownContainers = [...knownContainers, containerName].sort();
+    }
+  }
+
+  function onTaggedBatch(lines: TaggedText[]) {
+    for (const l of lines) {
+      if (podStates[l.pod] === undefined || !containersByPod.get(l.pod)?.has(l.container)) {
+        notePod(l.pod, l.container);
+      }
+    }
+    buf.pushTagged(lines);
+    if (paused) {
+      updateStatus();
+      return;
+    }
+    const n = lines.length;
+    const total = buf.lines.length;
+    for (let i = total - n; i < total; i++) {
+      pending.push(buf.lines[i]);
+      pendingTags.push(buf.tagIds[i]);
+    }
+    if (!raf) raf = requestAnimationFrame(flush);
+  }
+
+  function onNotice(n: WorkloadNotice) {
+    const who = `${n.pod}/${n.container}`;
+    switch (n.kind) {
+      case "started":
+        notePod(n.pod, n.container);
+        appendLog(`+ ${who} started`, "muted");
+        break;
+      case "ended":
+      case "deleted":
+        if (podStates[n.pod] !== undefined) podStates[n.pod] = "ended";
+        appendLog(`- ${who} ${n.message}`, "muted");
+        break;
+      case "failed":
+        appendLog(`! ${who}: ${n.message}`, "error-text");
+        break;
+      case "truncated":
+        truncatedNote = n.skipped > 0 ? n.message : "";
+        break;
+    }
   }
 
   /** Rebuild the display from the buffer (filter change, resume). */
   function renderLogs() {
     pending = [];
+    pendingTags = [];
     d.lines = [];
-    for (const text of buf.lines) {
-      if (logMatches(text, filterLower)) d.lines.push({ id: nextLineId++, text });
+    for (let i = 0; i < buf.lines.length; i++) {
+      const text = buf.lines[i];
+      if (passes(text, buf.tagIds[i])) d.lines.push(makeLine(text, buf.tagIds[i]));
     }
     rev++;
     updateStatus();
@@ -141,6 +249,7 @@
   function resetLogs() {
     buf.clear();
     pending = [];
+    pendingTags = [];
     d.lines = [];
     rev++;
     updateStatus();
@@ -157,6 +266,26 @@
     setPaused(false);
     streamId = ++streamCounter;
     try {
+      if (workload) {
+        podStates = {};
+        containersByPod.clear();
+        tagInfoCache = new Map();
+        truncatedNote = "";
+        await commands.cmdStreamWorkloadLogs(
+          workload.kind,
+          workload.namespace,
+          workload.name,
+          {
+            container: container || null,
+            tailLines: tail === "all" ? null : Number(tail),
+            sinceSeconds: since === "all" ? null : Number(since),
+            timestamps,
+          },
+          streamId,
+        );
+        return;
+      }
+      if (!pod) return;
       await commands.cmdStreamPodLogs(
         pod.namespace,
         pod.name,
@@ -173,13 +302,16 @@
   }
 
   async function downloadLogs() {
-    const name = container || "pod";
+    const name = container || (workload ? "all" : "pod");
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const filename = `${pod.name}_${name}${previous ? "_previous" : ""}_${stamp}.log`;
+    const filename = `${(workload ?? pod)?.name}_${name}${previous ? "_previous" : ""}_${stamp}.log`;
     try {
       // Written by the backend: Blob/anchor downloads are not reliable in
       // Tauri's webviews, and a save dialog would need an extra plugin.
-      const path = await commands.cmdSaveLogs(filename, buf.lines.join("\n") + "\n");
+      const text = isWorkload
+        ? buf.lines.map((l, i) => (buf.tagIds[i] ? tagInfo(buf.tagIds[i]).prefix + " " + l : l)).join("\n")
+        : buf.lines.join("\n");
+      const path = await commands.cmdSaveLogs(filename, text + "\n");
       statusNote = "saved to " + path;
     } catch (e) {
       appendLog("Could not save logs: " + e, "error-text");
@@ -199,7 +331,8 @@
   $effect(() => {
     if (!ready || started) return;
     started = true;
-    const firstMain = containers.find((c) => !c.init);
+    // Workloads follow all containers by default.
+    const firstMain = isWorkload ? undefined : containers.find((c) => !c.init);
     container = firstMain?.name ?? "";
     startLogs();
   });
@@ -209,6 +342,11 @@
     // `bind:` and `onchange` both run on change; wait for the bound value.
     await tick();
     if (started) startLogs();
+  }
+
+  async function renderSoon() {
+    await tick();
+    renderLogs();
   }
 
   async function toggleWrap() {
@@ -221,6 +359,8 @@
   onMount(async () => {
     const un = await Promise.all([
       events.podLog.listen((e) => e.payload.streamId === streamId && onBatch(e.payload.data)),
+      events.workloadLog.listen((e) => e.payload.streamId === streamId && onTaggedBatch(e.payload.data)),
+      events.workloadNotice.listen((e) => e.payload.streamId === streamId && onNotice(e.payload)),
       events.podLogDone.listen((e) => e.payload.streamId === streamId && appendLog("[stream ended]", "muted")),
       events.podLogError.listen((e) => e.payload.streamId === streamId && appendLog(e.payload.data, "error-text")),
     ]);
@@ -238,14 +378,15 @@
     // stopping here could race with it and kill the new stream. Decide after
     // the current update has settled: during teardown `detail.pod` may still
     // hold the previous value.
+    // Workload streams are stopped by whoever closes the viewer.
     queueMicrotask(() => {
-      if (!detail.pod) commands.cmdStopPodLogs().catch(() => {});
+      if (!isWorkload && !detail.pod) commands.cmdStopPodLogs().catch(() => {});
     });
   });
 </script>
 
 <div class="logs-header section-header">
-  <h3>Logs</h3>
+  <h3>Logs{#if isWorkload}<span class="muted"> · {title}</span>{/if}</h3>
   <label class="check"><input type="checkbox" bind:checked={follow} /> Follow</label>
   <button type="button" class="btn" class:active={paused} onclick={() => setPaused(!paused)}>
     {paused ? "Resume" : "Pause"}
@@ -254,12 +395,27 @@
   <button type="button" class="btn" onclick={downloadLogs}>Download</button>
 </div>
 <div class="logs-options">
-  <select class="mini" title="Container" bind:value={container} onchange={restart}>
-    {#each containers as c (c.name)}
-      <option value={c.name}>{c.init ? `${c.name} (init)` : c.name}</option>
-    {/each}
-  </select>
-  <label class="check"><input type="checkbox" bind:checked={previous} onchange={restart} /> Previous</label>
+  {#if isWorkload}
+    <select class="mini" title="Pod" bind:value={podFilter} onchange={renderSoon}>
+      <option value="">All pods ({podNames.length})</option>
+      {#each podNames as p (p)}
+        <option value={p}>{p}{podStates[p] === "ended" ? " (ended)" : ""}</option>
+      {/each}
+    </select>
+    <select class="mini" title="Container" bind:value={container} onchange={restart}>
+      <option value="">All containers</option>
+      {#each knownContainers as c (c)}
+        <option value={c}>{c}</option>
+      {/each}
+    </select>
+  {:else}
+    <select class="mini" title="Container" bind:value={container} onchange={restart}>
+      {#each containers as c (c.name)}
+        <option value={c.name}>{c.init ? `${c.name} (init)` : c.name}</option>
+      {/each}
+    </select>
+    <label class="check"><input type="checkbox" bind:checked={previous} onchange={restart} /> Previous</label>
+  {/if}
   <select class="mini" title="Tail lines" bind:value={tail} onchange={restart}>
     <option value="100">100 lines</option>
     <option value="200">200 lines</option>
@@ -282,6 +438,7 @@
     oninput={onFilterInput}
   />
   <span class="muted">{status}</span>
+  {#if truncatedNote}<span class="warn" title="At most 20 containers are followed at once">{truncatedNote}</span>{/if}
 </div>
 <div class="output" style:--line-height="{LINE_HEIGHT}px">
   {#key wrap}
@@ -299,7 +456,10 @@
         {@const line = d.lines[i]}
         {#if line}
           <div class="line {line.cls ?? ''}" class:wrap>
-            {#each splitHighlights(line.text, line.cls ? '' : filter) as seg}{#if seg.hit}<mark>{seg.text}</mark
+            {#if line.prefix}<span class="pod" style:color={line.color}
+                >{#each splitHighlights(line.prefix, filter) as seg}{#if seg.hit}<mark>{seg.text}</mark
+                    >{:else}{seg.text}{/if}{/each}</span
+              >{/if}{#each splitHighlights(line.text, line.cls ? '' : filter) as seg}{#if seg.hit}<mark>{seg.text}</mark
                 >{:else}{seg.text}{/if}{/each}
           </div>
         {/if}
@@ -380,6 +540,13 @@
   }
   .line.muted {
     color: var(--text-muted);
+  }
+  .pod {
+    margin-right: 8px;
+    font-weight: 600;
+  }
+  .warn {
+    color: var(--amber);
   }
   .line.error-text {
     color: #f5a3a5;

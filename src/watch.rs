@@ -279,11 +279,21 @@ where
     K: Resource<DynamicType = ()> + Clone + DeserializeOwned + Debug + Send + Sync + 'static,
     T: Send + 'static,
 {
+    watch_with_config(api, watcher::Config::default(), convert)
+}
+
+/// [`watch`] with a custom watcher config (label/field selectors).
+pub fn watch_with_config<K, T>(
+    api: Api<K>,
+    config: watcher::Config,
+    convert: fn(&K) -> T,
+) -> (Store<K>, BoxStream<'static, Update<T>>)
+where
+    K: Resource<DynamicType = ()> + Clone + DeserializeOwned + Debug + Send + Sync + 'static,
+    T: Send + 'static,
+{
     let (store, writer) = reflector::store();
-    let events = reflector::reflector(
-        writer,
-        watcher::watcher(api, watcher::Config::default()).default_backoff(),
-    );
+    let events = reflector::reflector(writer, watcher::watcher(api, config).default_backoff());
     let tracker = Tracker {
         init: Vec::new(),
         live: false,
@@ -309,6 +319,16 @@ pub fn watch_pods(
         None => Api::all(client.clone()),
     };
     watch(api, pod_info)
+}
+
+/// Watch the pods of one namespace matching a label selector string.
+pub fn watch_pods_selected(
+    client: &Client,
+    namespace: &str,
+    selector: &str,
+) -> (Store<Pod>, BoxStream<'static, Update<PodInfo>>) {
+    let api: Api<Pod> = Api::namespaced(client.clone(), namespace);
+    watch_with_config(api, watcher::Config::default().labels(selector), pod_info)
 }
 
 pub fn watch_nodes(client: &Client) -> (Store<Node>, BoxStream<'static, Update<NodeInfo>>) {

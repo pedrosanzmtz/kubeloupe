@@ -6,10 +6,11 @@ use kube::Client;
 use kubeloupe::{
     apply_pod_yaml, batch_lines, client_for_context, exec_pod, get_namespaces, get_node_metrics,
     get_nodes, get_overview, get_pod_details, get_pod_metrics, get_pod_yaml, get_pods,
-    list_contexts, serve_port_forward, stream_pod_logs, watch, ContextInfo, LogOptions,
-    NamespaceInfo, NodeInfo, NodeUsage, Overview, PodDetail, PodInfo, PodUsage,
+    list_contexts, serve_port_forward, stream_pod_logs, stream_workload_logs, watch, ContextInfo,
+    LogOptions, NamespaceInfo, NodeInfo, NodeUsage, Overview, PodDetail, PodInfo, PodUsage,
+    StopReason, TaggedLine, WorkloadEvent, WorkloadKind,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -230,6 +231,160 @@ async fn cmd_stream_pod_logs(
     Ok(())
 }
 
+/// A batch of merged log lines from the pods of a workload. Same `streamId`
+/// scheme as [`PodLog`]; every line says which pod and container it is from.
+#[derive(Debug, Clone, Serialize, Type, Event)]
+#[serde(rename_all = "camelCase")]
+struct WorkloadLog {
+    stream_id: u64,
+    data: Vec<TaggedLine>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+enum WorkloadNoticeKind {
+    /// A per-container stream started (a pod appeared).
+    Started,
+    /// The container exited and its log ended.
+    Ended,
+    /// The pod was deleted.
+    Deleted,
+    /// The stream failed; see `message`.
+    Failed,
+    /// More containers match than the stream limit: `skipped` are waiting.
+    Truncated,
+}
+
+/// A change in which pods a workload stream is following.
+#[derive(Debug, Clone, Serialize, Type, Event)]
+#[serde(rename_all = "camelCase")]
+struct WorkloadNotice {
+    stream_id: u64,
+    kind: WorkloadNoticeKind,
+    /// Empty for `truncated`.
+    pod: String,
+    container: String,
+    message: String,
+    /// For `truncated`: the stream limit and how many containers are waiting.
+    limit: u32,
+    skipped: u32,
+}
+
+/// Options of a workload log stream.
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+struct WorkloadLogOptions {
+    /// One container name for every pod; `None` follows all containers.
+    container: Option<String>,
+    /// Applies to the pods present when the stream starts; pods that appear
+    /// later are read from their beginning.
+    tail_lines: Option<i64>,
+    since_seconds: Option<i64>,
+    timestamps: Option<bool>,
+}
+
+fn workload_notice(stream_id: u64, ev: WorkloadEvent) -> Option<WorkloadNotice> {
+    let (kind, pod, container, message, limit, skipped) = match ev {
+        WorkloadEvent::Lines(_) => return None,
+        WorkloadEvent::Started { pod, container } => (
+            WorkloadNoticeKind::Started,
+            pod,
+            container,
+            String::new(),
+            0,
+            0,
+        ),
+        WorkloadEvent::Stopped {
+            pod,
+            container,
+            reason,
+        } => {
+            let (kind, message) = match reason {
+                StopReason::Deleted => (WorkloadNoticeKind::Deleted, "pod deleted".to_string()),
+                StopReason::Ended => (WorkloadNoticeKind::Ended, "log ended".to_string()),
+                StopReason::Failed(e) => (WorkloadNoticeKind::Failed, e),
+            };
+            (kind, pod, container, message, 0, 0)
+        }
+        WorkloadEvent::Truncated { limit, skipped } => (
+            WorkloadNoticeKind::Truncated,
+            String::new(),
+            String::new(),
+            format!("following {limit} containers, {skipped} more waiting"),
+            limit as u32,
+            skipped as u32,
+        ),
+    };
+    Some(WorkloadNotice {
+        stream_id,
+        kind,
+        pod,
+        container,
+        message,
+        limit,
+        skipped,
+    })
+}
+
+/// Follow the logs of all pods of a Deployment, StatefulSet, DaemonSet, Job
+/// or ReplicaSet (`kind` is case-insensitive). Replaces any running log
+/// stream; stopped by `cmd_stop_pod_logs`, `cmd_stop_workload_logs`, another
+/// log stream or a context switch.
+#[tauri::command]
+#[specta::specta]
+async fn cmd_stream_workload_logs(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    kind: String,
+    namespace: String,
+    name: String,
+    options: WorkloadLogOptions,
+    stream_id: u64,
+) -> Result<(), String> {
+    stop_log_stream(&state);
+    let kind = kind.parse::<WorkloadKind>().map_err(|e| e.to_string())?;
+    let client = client(&state).await?;
+    let opts = LogOptions {
+        container: options.container,
+        previous: false,
+        tail_lines: options.tail_lines,
+        since_seconds: options.since_seconds,
+        timestamps: options.timestamps.unwrap_or(false),
+    };
+    let handle = tauri::async_runtime::spawn(async move {
+        let emitter = app.clone();
+        let result =
+            stream_workload_logs(
+                &client,
+                kind,
+                &namespace,
+                &name,
+                &opts,
+                move |ev| match ev {
+                    WorkloadEvent::Lines(data) => {
+                        let _ = WorkloadLog { stream_id, data }.emit(&emitter);
+                    }
+                    ev => {
+                        if let Some(n) = workload_notice(stream_id, ev) {
+                            let _ = n.emit(&emitter);
+                        }
+                    }
+                },
+            )
+            .await;
+        if let Err(e) = result {
+            let _ = PodLogError {
+                stream_id,
+                data: format!("Log stream ended with an error: {e}"),
+            }
+            .emit(&app);
+        }
+        let _ = PodLogDone { stream_id }.emit(&app);
+    });
+    *state.log_task.lock().unwrap() = Some(handle);
+    Ok(())
+}
+
 /// Save log text to the user's Downloads folder and return the path. A
 /// webview Blob download is not reliable across the platforms Tauri targets
 /// and there is no file dialog without an extra plugin, so we write directly.
@@ -264,6 +419,14 @@ async fn cmd_save_logs(filename: String, content: String) -> Result<String, Stri
 #[tauri::command]
 #[specta::specta]
 async fn cmd_stop_pod_logs(state: State<'_, AppState>) -> Result<(), String> {
+    stop_log_stream(&state);
+    Ok(())
+}
+
+/// Stop a workload log stream (and every per-pod task under it).
+#[tauri::command]
+#[specta::specta]
+async fn cmd_stop_workload_logs(state: State<'_, AppState>) -> Result<(), String> {
     stop_log_stream(&state);
     Ok(())
 }
@@ -693,6 +856,8 @@ fn specta_builder() -> Builder<tauri::Wry> {
             cmd_get_pod_details,
             cmd_stream_pod_logs,
             cmd_stop_pod_logs,
+            cmd_stream_workload_logs,
+            cmd_stop_workload_logs,
             cmd_save_logs,
             cmd_get_overview,
             cmd_get_metrics,
@@ -715,6 +880,8 @@ fn specta_builder() -> Builder<tauri::Wry> {
             PodLog,
             PodLogError,
             PodLogDone,
+            WorkloadLog,
+            WorkloadNotice,
             ExecOutput,
             ExecClosed
         ])

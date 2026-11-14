@@ -1,8 +1,9 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use kubeloupe::{
-    client, exec_in_pod, list_namespaces, list_nodes, list_pods, print_pod_logs, print_pod_yaml,
-    print_top_nodes, print_top_pods, run_port_forward, watch_and_print, LogOptions,
+    client, exec_in_pod, list_namespaces, list_nodes, list_pods, parse_log_target, print_pod_logs,
+    print_pod_yaml, print_top_nodes, print_top_pods, print_workload_logs, run_port_forward,
+    watch_and_print, LogOptions, LogTarget,
 };
 
 #[derive(Parser)]
@@ -33,9 +34,10 @@ enum Commands {
     },
     /// List nodes
     Nodes,
-    /// Show the last lines of a pod's logs
+    /// Show the last lines of a pod's logs, or of every pod of a workload
     Logs {
-        /// Pod name
+        /// Pod name, or `deploy/<name>`, `sts/<name>`, `ds/<name>`, `job/<name>`
+        /// to merge the logs of all its pods (`[pod] line`)
         name: String,
         /// Pod namespace
         #[arg(short, long)]
@@ -124,7 +126,22 @@ async fn main() -> Result<()> {
                 tail_lines: Some(tail),
                 ..LogOptions::default()
             };
-            print_pod_logs(&client, namespace.as_deref(), &name, &opts, follow).await?
+            match parse_log_target(&name)? {
+                LogTarget::Pod(pod) => {
+                    print_pod_logs(&client, namespace.as_deref(), &pod, &opts, follow).await?
+                }
+                LogTarget::Workload(kind, workload) => {
+                    print_workload_logs(
+                        &client,
+                        namespace.as_deref(),
+                        kind,
+                        &workload,
+                        &opts,
+                        follow,
+                    )
+                    .await?
+                }
+            }
         }
         Commands::Top { resource } => match resource.as_str() {
             "pods" => print_top_pods(&client).await?,

@@ -18,6 +18,8 @@ use std::collections::BTreeMap;
 use tokio::io::AsyncReadExt;
 
 pub mod watch;
+pub mod workload_logs;
+pub use workload_logs::*;
 
 /// Build a client for the given context (`None` = the kubeconfig's
 /// current-context), or from in-cluster config.
@@ -452,13 +454,28 @@ pub async fn stream_pod_logs<F>(
     namespace: &str,
     name: &str,
     opts: &LogOptions,
+    on_line: F,
+) -> Result<()>
+where
+    F: FnMut(String) + Send,
+{
+    stream_pod_logs_follow(client, namespace, name, opts, !opts.previous, on_line).await
+}
+
+/// [`stream_pod_logs`] with an explicit `follow`.
+pub(crate) async fn stream_pod_logs_follow<F>(
+    client: &Client,
+    namespace: &str,
+    name: &str,
+    opts: &LogOptions,
+    follow: bool,
     mut on_line: F,
 ) -> Result<()>
 where
     F: FnMut(String) + Send,
 {
     let pods: Api<Pod> = Api::namespaced(client.clone(), namespace);
-    let params = opts.to_params(!opts.previous);
+    let params = opts.to_params(follow);
     let mut lines = pods.log_stream(name, &params).await?.lines();
     while let Some(line) = lines.try_next().await? {
         on_line(line);
@@ -470,15 +487,15 @@ where
 /// flushed when it reaches `max_lines` or when `interval` has passed since its
 /// first line, so a noisy pod costs one event per batch instead of per line.
 /// Returns (after flushing the remainder) once all senders are dropped.
-pub async fn batch_lines<F>(
-    mut rx: tokio::sync::mpsc::UnboundedReceiver<String>,
+pub async fn batch_lines<T, F>(
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<T>,
     max_lines: usize,
     interval: std::time::Duration,
     mut emit: F,
 ) where
-    F: FnMut(Vec<String>),
+    F: FnMut(Vec<T>),
 {
-    let mut batch: Vec<String> = Vec::new();
+    let mut batch: Vec<T> = Vec::new();
     let mut deadline: Option<tokio::time::Instant> = None;
     loop {
         let sleep = async {
@@ -1201,7 +1218,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn batch_lines_flushes_on_interval() {
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
         let (out_tx, mut out_rx) = tokio::sync::mpsc::unbounded_channel();
         let task = tokio::spawn(batch_lines(
             rx,
