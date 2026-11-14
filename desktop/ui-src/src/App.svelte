@@ -29,6 +29,9 @@
   import { detail } from "./lib/stores/detail.svelte";
   import { listenDrain } from "./lib/stores/actions.svelte";
   import { live } from "./lib/stores/live.svelte";
+  import { handleKey, keyboard } from "./lib/stores/keyboard.svelte";
+  import CommandPalette from "./lib/components/CommandPalette.svelte";
+  import ShortcutHelp from "./lib/components/ShortcutHelp.svelte";
 
   onMount(() => {
     // Subscribe before the first watch starts; events that still race ahead
@@ -61,6 +64,9 @@
 
   const kind = $derived(currentKind());
 </script>
+
+<!-- Capture phase: shortcuts see the state before a menu or dialog reacts. -->
+<svelte:window onkeydowncapture={handleKey} />
 
 <Header />
 <div class="main" class:hidden={dock.maximized}>
@@ -97,6 +103,12 @@
   <CreateDialog />
 {/if}
 <UnsavedDialog />
+{#if keyboard.palette}
+  <CommandPalette />
+{/if}
+{#if keyboard.help}
+  <ShortcutHelp />
+{/if}
 
 <style>
   .main {

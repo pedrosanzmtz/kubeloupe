@@ -170,7 +170,8 @@ test("dragging the top edge resizes the dock", async ({ page }) => {
   await page.mouse.down();
   await page.mouse.move(handle.x + 50, handle.y - 100, { steps: 5 });
   await page.mouse.up();
-  await expect.poll(async () => Math.round((await dock(page).boundingBox())!.height)).toBe(Math.round(before + 100));
+  // About 100px taller (the handle straddles the edge, so give or take a few).
+  await expect.poll(async () => Math.abs((await dock(page).boundingBox())!.height - (before + 100))).toBeLessThan(8);
 });
 
 test("a context switch closes every tab", async ({ page }) => {

@@ -135,7 +135,7 @@ export function rows(page: Page): Locator {
 
 /** The data row whose Name cell is `name`. */
 export function row(page: Page, name: string): Locator {
-  return rows(page).filter({ has: page.getByRole("cell", { name, exact: true }) });
+  return rows(page).filter({ has: page.getByRole("gridcell", { name, exact: true }) });
 }
 
 /** The text of every cell in a column, top to bottom. */

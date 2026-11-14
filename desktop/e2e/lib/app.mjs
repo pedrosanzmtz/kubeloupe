@@ -225,7 +225,7 @@ export class App {
   rows() {
     return this.js(
       `return Array.from(document.querySelectorAll('[data-testid="resource-row"]'), (r) => {
-         const c = r.querySelectorAll('[role="cell"]');
+         const c = r.querySelectorAll('[role="gridcell"]');
          return [c[1]?.textContent.trim() ?? "", c[2]?.textContent.trim() ?? ""];
        });`,
     );
@@ -233,7 +233,7 @@ export class App {
 
   /** The table row whose Name cell is `name` (and Namespace cell `namespace`). */
   row(name, namespace) {
-    const cell = (v) => `[*[@role='cell'][normalize-space()=${xq(v)}]]`;
+    const cell = (v) => `[*[@role='gridcell'][normalize-space()=${xq(v)}]]`;
     return By.xpath(`//*[@data-testid='resource-row']${cell(name)}${namespace ? cell(namespace) : ""}`);
   }
 

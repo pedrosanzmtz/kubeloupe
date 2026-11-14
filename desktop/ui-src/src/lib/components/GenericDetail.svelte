@@ -11,6 +11,7 @@
   import { isWorkloadResource } from "../dock";
   import { closeDetail } from "../stores/detail.svelte";
   import { openDockTab } from "../stores/dock.svelte";
+  import { registerTabs } from "../stores/keyboard.svelte";
   import type { Target } from "../stores/detail.svelte";
   import { LiveDetail } from "../stores/live-detail.svelte";
   import { LiveRelated } from "../stores/related.svelte";
@@ -51,6 +52,8 @@
     live.stop();
     related.stop();
   });
+  // Ctrl/Cmd+1…9 picks a tab.
+  onMount(() => registerTabs({ count: () => tabs.length, select: (i) => (tab = tabs[i].id) }));
 
   const title = $derived(target.namespace ? `${target.namespace}/${target.name}` : target.name);
 </script>

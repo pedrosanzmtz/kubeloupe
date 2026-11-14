@@ -149,7 +149,10 @@ pub async fn discover(client: &Client) -> Result<Vec<ResourceKind>> {
                 },
                 crd,
                 verbs: r.verbs.clone(),
-                short_names: r.short_names.clone().unwrap_or_default(),
+                short_names: short_names_with_aliases(
+                    &r.name,
+                    r.short_names.clone().unwrap_or_default(),
+                ),
                 columns: columns_for(&resource, printer_cols),
                 actions: crate::actions::actions_for(&resource, &r.verbs),
                 resource,
@@ -233,30 +236,46 @@ pub async fn check_access(
         .await
 }
 
-/// Aliases kubectl users type that discovery does not provide.
+/// Aliases kubectl users type that discovery does not always provide, as
+/// (alias, plural).
+const ALIASES: &[(&str, &str)] = &[
+    ("po", "pods"),
+    ("deploy", "deployments"),
+    ("sts", "statefulsets"),
+    ("ds", "daemonsets"),
+    ("rs", "replicasets"),
+    ("cj", "cronjobs"),
+    ("svc", "services"),
+    ("ing", "ingresses"),
+    ("netpol", "networkpolicies"),
+    ("cm", "configmaps"),
+    ("hpa", "horizontalpodautoscalers"),
+    ("quota", "resourcequotas"),
+    ("pvc", "persistentvolumeclaims"),
+    ("pv", "persistentvolumes"),
+    ("sc", "storageclasses"),
+    ("no", "nodes"),
+    ("ns", "namespaces"),
+    ("ev", "events"),
+    ("ep", "endpoints"),
+];
+
 fn alias_of(name: &str) -> &str {
-    match name {
-        "po" => "pods",
-        "deploy" => "deployments",
-        "sts" => "statefulsets",
-        "ds" => "daemonsets",
-        "rs" => "replicasets",
-        "cj" => "cronjobs",
-        "svc" => "services",
-        "ing" => "ingresses",
-        "netpol" => "networkpolicies",
-        "cm" => "configmaps",
-        "hpa" => "horizontalpodautoscalers",
-        "quota" => "resourcequotas",
-        "pvc" => "persistentvolumeclaims",
-        "pv" => "persistentvolumes",
-        "sc" => "storageclasses",
-        "no" => "nodes",
-        "ns" => "namespaces",
-        "ev" => "events",
-        "ep" => "endpoints",
-        other => other,
+    ALIASES
+        .iter()
+        .find(|(alias, _)| *alias == name)
+        .map_or(name, |(_, plural)| plural)
+}
+
+/// The short names discovery reports plus the kubectl aliases of `plural`,
+/// so the UI's command palette finds `deploy` and `svc` on any cluster.
+fn short_names_with_aliases(plural: &str, mut short: Vec<String>) -> Vec<String> {
+    for (alias, p) in ALIASES {
+        if *p == plural && !short.iter().any(|s| s == alias) {
+            short.push(alias.to_string());
+        }
     }
+    short
 }
 
 /// Find a kind by what a person types: plural, kind, short name, or
@@ -294,5 +313,20 @@ mod tests {
             "Widget"
         );
         assert!(resolve_kind(&kinds, "nope").is_none());
+    }
+
+    #[test]
+    fn short_names_gain_the_kubectl_aliases_once() {
+        assert_eq!(
+            short_names_with_aliases("deployments", vec!["deploy".into()]),
+            vec!["deploy"]
+        );
+        assert_eq!(
+            short_names_with_aliases("networkpolicies", vec![]),
+            vec!["netpol"]
+        );
+        assert!(short_names_with_aliases("widgets", vec![]).is_empty());
+        assert_eq!(alias_of("svc"), "services");
+        assert_eq!(alias_of("widgets"), "widgets");
     }
 }

@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from "svelte";
   import DockPane from "./DockPane.svelte";
   import { clampHeight } from "../dock";
   import { activateDockTab, closeDockTab, dock, toggleDock, toggleMaximized } from "../stores/dock.svelte";
@@ -26,19 +25,6 @@
     drag = null;
   }
 
-  // Ctrl+` toggles the dock. Registered in the capture phase so a focused
-  // terminal does not swallow it. (Moves to the central keymap with #38.)
-  onMount(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.ctrlKey && !e.altKey && !e.metaKey && (e.key === "`" || e.code === "Backquote")) {
-        e.preventDefault();
-        e.stopPropagation();
-        toggleDock();
-      }
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  });
 </script>
 
 {#if dock.tabs.length > 0}

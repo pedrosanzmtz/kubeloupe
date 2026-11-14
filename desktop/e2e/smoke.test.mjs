@@ -100,10 +100,13 @@ describe("kubeloupe on WebKitGTK against kind", { timeout: 15 * 60_000 }, () => 
     const [pod] = podNames("demo", "app=logger");
     assert.ok(pod, "a demo logger pod exists");
     await app.openDetail("Pods", "demo", pod);
-    await app.waitFor(
-      async () => (await app.driver.findElements(By.css('[data-testid="detail-panel"] [data-testid="log-line"]'))).length > 0,
-      { timeout: 20_000, message: "log lines in the pod panel" },
-    );
+    // Logs open in a dock tab.
+    await (await app.find(By.xpath("//*[@data-testid='detail-panel']//button[normalize-space()='Logs']"))).click();
+    const lines = By.css(`[data-testid="dock"] [data-tab="logs:demo/${pod}"] [data-testid="log-line"]`);
+    await app.waitFor(async () => (await app.driver.findElements(lines)).length > 0, {
+      timeout: 20_000,
+      message: "log lines in the dock tab",
+    });
   });
 
   it("runs a command in the pod terminal", { timeout: TEST_TIMEOUT }, async () => {
@@ -159,13 +162,11 @@ describe("kubeloupe on WebKitGTK against kind", { timeout: 15 * 60_000 }, () => 
 
   it("follows workload logs of Deployment demo/web with pod prefixes", { timeout: TEST_TIMEOUT }, async () => {
     await app.openDetail("Deployments", "demo", "web");
-    await (
-      await app.find(By.xpath("//*[@data-testid='detail-panel']//button[@role='tab'][normalize-space()='Logs']"))
-    ).click();
+    await (await app.find(By.xpath("//*[@data-testid='detail-panel']//button[normalize-space()='Logs']"))).click();
     const prefix = await app.waitFor(
       () =>
         app.js(
-          `const line = document.querySelector('[data-testid="detail-panel"] [data-testid="log-line"] .pod');
+          `const line = document.querySelector('[data-testid="dock"] [data-tab="wlogs:Deployment:demo/web"] [data-testid="log-line"] .pod');
            return line ? line.textContent.trim() : null;`,
         ),
       { timeout: 30_000, message: "a pod-prefixed log line" },
