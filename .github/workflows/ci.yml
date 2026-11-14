@@ -87,5 +87,45 @@ jobs:
         working-directory: desktop/ui-src
       - run: npm run build
         working-directory: desktop/ui-src
+      - name: Fail if the test entry leaked into the production build
+        run: |
+          if [ -e dist/test.html ] || grep -rqE "__fake|fake-backend" dist; then
+            echo "::error::dist/ contains the test-only entry (test.html / src/test)."
+            exit 1
+          fi
+        working-directory: desktop/ui-src
       - run: npm run check
         working-directory: desktop/ui-src
+      - name: Unit tests (Vitest)
+        run: npm test
+        working-directory: desktop/ui-src
+      - name: Playwright version
+        id: playwright
+        run: echo "version=$(node -p "require('./package-lock.json').packages['node_modules/@playwright/test'].version")" >> "$GITHUB_OUTPUT"
+        working-directory: desktop/ui-src
+      - uses: actions/cache@v4.2.3
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}-chromium
+      - name: Install Chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+        working-directory: desktop/ui-src
+      - name: Install Chromium's system dependencies
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+        working-directory: desktop/ui-src
+      - name: App tests (Playwright, fake backend)
+        run: npx playwright test
+        working-directory: desktop/ui-src
+      - name: Upload Playwright screenshots and traces
+        if: failure()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: playwright-results
+          path: |
+            desktop/ui-src/test-results/
+            desktop/ui-src/playwright-report/
+          retention-days: 14
+          if-no-files-found: ignore
