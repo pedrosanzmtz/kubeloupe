@@ -13,7 +13,7 @@ import { openCreate } from "./create.svelte";
 import { openDetail } from "./detail.svelte";
 import { dockMenuFor } from "../dock";
 import { dock, openDockTab, toggleDock } from "./dock.svelte";
-import { activeTable, openHelp } from "./keyboard.svelte";
+import { activeTable, openHelp, openSettings } from "./keyboard.svelte";
 import { openLocalShell } from "./localShell";
 import { whenDiscarded } from "./unsaved.svelte";
 
@@ -42,6 +42,13 @@ export function paletteItems(): PaletteItem[] {
     },
     { id: "cmd:refresh", group: "Command", label: "Refresh", terms: ["reload"], run: refresh },
     { id: "cmd:help", group: "Command", label: "Keyboard shortcuts", terms: ["help", "keys"], run: openHelp },
+    {
+      id: "cmd:settings",
+      group: "Command",
+      label: "Settings…",
+      terms: ["preferences", "theme", "options"],
+      run: openSettings,
+    },
     {
       id: "cmd:local-shell",
       group: "Command",

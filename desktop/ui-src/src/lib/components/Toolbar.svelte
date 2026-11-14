@@ -1,11 +1,13 @@
 <script lang="ts">
   import { app, currentKind } from "../stores/app.svelte";
   import NamespacePicker from "./NamespacePicker.svelte";
+  import ColumnChooser from "./ColumnChooser.svelte";
   import { openCreate } from "../stores/create.svelte";
   import { HELM_VIEW } from "../helm";
 
+  const kind = $derived(currentKind());
   // Only namespaced kinds (and Helm releases) can be narrowed to a namespace.
-  const namespaced = $derived(app.view === HELM_VIEW || (currentKind()?.resource.namespaced ?? false));
+  const namespaced = $derived(app.view === HELM_VIEW || (kind?.resource.namespaced ?? false));
 </script>
 
 <div class="toolbar">
@@ -20,6 +22,9 @@
     aria-label="Filter"
     bind:value={app.search}
   />
+  {#if kind}
+    <ColumnChooser {kind} />
+  {/if}
   <button type="button" class="btn primary create" title="Create resources from YAML" onclick={openCreate}
     >+ Create</button
   >

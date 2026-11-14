@@ -126,6 +126,6 @@
     outline: none;
   }
   button.danger {
-    color: #f5a3a5;
+    color: var(--error-text);
   }
 </style>

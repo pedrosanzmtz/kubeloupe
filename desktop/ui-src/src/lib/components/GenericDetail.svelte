@@ -123,7 +123,7 @@
 
 <style>
   aside {
-    width: 420px;
+    width: min(var(--detail-width, 420px), 75vw);
     flex-shrink: 0;
     background: var(--bg-raised);
     border-left: 1px solid var(--border);
