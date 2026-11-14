@@ -98,7 +98,7 @@ export async function openKind(page: Page, label: string) {
 
 /** Data rows of the resource table (not the header). */
 export function rows(page: Page): Locator {
-  return page.locator(".table .tr");
+  return page.getByTestId("resource-row");
 }
 
 /** The data row whose Name cell is `name`. */

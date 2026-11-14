@@ -444,7 +444,7 @@
   <span class="muted">{status}</span>
   {#if truncatedNote}<span class="warn" title="At most 20 containers are followed at once">{truncatedNote}</span>{/if}
 </div>
-<div class="output" style:--line-height="{LINE_HEIGHT}px">
+<div class="output" data-testid="log-output" style:--line-height="{LINE_HEIGHT}px">
   {#key wrap}
     <VirtualList
       bind:this={list}
@@ -459,7 +459,7 @@
       {#snippet row(i)}
         {@const line = d.lines[i]}
         {#if line}
-          <div class="line {line.cls ?? ''}" class:wrap>
+          <div class="line {line.cls ?? ''}" class:wrap data-testid="log-line">
             {#if line.prefix}<span class="pod" style:color={line.color}
                 >{#each splitHighlights(line.prefix, filter) as seg}{#if seg.hit}<mark>{seg.text}</mark
                     >{:else}{seg.text}{/if}{/each}</span

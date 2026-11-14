@@ -26,7 +26,7 @@
 {#if req && copy}
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div class="backdrop" onclick={(e) => e.target === e.currentTarget && closeDialog()}>
-    <div class="dialog" role="alertdialog" aria-modal="true" aria-label={copy.title} use:focusFirst>
+    <div class="dialog" role="alertdialog" data-testid="action-dialog" aria-modal="true" aria-label={copy.title} use:focusFirst>
       <h2 class:danger>{copy.title}</h2>
 
       {#if drain}
@@ -77,6 +77,7 @@
             <input
               class="input"
               type="number"
+              data-testid="action-replicas"
               min="0"
               step="1"
               bind:value={req.replicas}
@@ -107,6 +108,7 @@
           <button
             type="button"
             class="btn confirm"
+            data-testid="action-confirm"
             class:danger
             disabled={!canConfirm(req)}
             onclick={confirmRequest}

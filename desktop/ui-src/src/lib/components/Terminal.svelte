@@ -95,7 +95,7 @@
   });
 </script>
 
-<div class="terminal" bind:this={host}></div>
+<div class="terminal" data-testid="terminal" bind:this={host}></div>
 
 <style>
   .terminal {

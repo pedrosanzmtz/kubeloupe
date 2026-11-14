@@ -46,3 +46,94 @@ jobs:
           kubectl --context kind-kubeloupe-test get events -A --sort-by=.lastTimestamp || true
           kubectl --context kind-kubeloupe-test -n kube-system logs deploy/metrics-server --tail=50 || true
           kubectl --context kind-kubeloupe-test describe pods -n demo || true
+
+  # The real desktop app (embedded frontend, real IPC) on WebKitGTK, driven
+  # through tauri-driver + WebKitWebDriver under Xvfb, against its own kind
+  # cluster. See desktop/e2e/README.md.
+  e2e:
+    name: e2e (WebKitGTK, kind)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      TAURI_DRIVER_VERSION: 2.1.0
+      # Software GL under Xvfb: the runners have no GPU.
+      LIBGL_ALWAYS_SOFTWARE: "1"
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      # Runs while the app builds; "Wait for the cluster" picks it up.
+      - name: Create kind cluster (background)
+        run: |
+          mkdir -p "$RUNNER_TEMP/cluster"
+          ( bash scripts/test-cluster/setup.sh > "$RUNNER_TEMP/cluster/setup.log" 2>&1
+            echo $? > "$RUNNER_TEMP/cluster/rc" ) &
+
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Tauri, WebKitWebDriver and Xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev \
+            webkit2gtk-driver xvfb
+      - uses: Swatinem/rust-cache@v2.7.8
+        with:
+          # The custom-protocol build differs from the other jobs' builds.
+          key: e2e
+      - uses: actions/cache@v4.2.3
+        id: tauri-driver-cache
+        with:
+          path: ~/.cargo/bin/tauri-driver
+          key: tauri-driver-${{ runner.os }}-${{ env.TAURI_DRIVER_VERSION }}
+      - name: Install tauri-driver
+        if: steps.tauri-driver-cache.outputs.cache-hit != 'true'
+        run: cargo install tauri-driver --locked --version "$TAURI_DRIVER_VERSION"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: desktop/ui-src/.nvmrc
+          cache: npm
+          cache-dependency-path: |
+            desktop/ui-src/package-lock.json
+            desktop/e2e/package-lock.json
+      - name: Install npm dependencies
+        run: |
+          npm --prefix desktop/ui-src ci
+          npm --prefix desktop/e2e ci
+
+      # What `cargo tauri build --debug --no-bundle` does, without the Tauri
+      # CLI: build the frontend, then the app with the frontend embedded
+      # (tauri/custom-protocol), so it does not load devUrl.
+      - name: Build the app
+        run: |
+          npm --prefix desktop/ui-src run build
+          cargo build -p kubeloupe-desktop --locked --features tauri/custom-protocol
+
+      - name: Wait for the cluster
+        run: |
+          for _ in $(seq 1 360); do [ -f "$RUNNER_TEMP/cluster/rc" ] && break; sleep 1; done
+          cat "$RUNNER_TEMP/cluster/setup.log"
+          [ "$(cat "$RUNNER_TEMP/cluster/rc" 2>/dev/null)" = 0 ]
+          kubectl --context kind-kubeloupe-test -n demo wait --for=condition=Ready pod/multi --timeout=180s
+
+      - name: Smoke tests
+        run: xvfb-run -a -s "-screen 0 1600x1000x24" npm --prefix desktop/e2e test
+
+      # Report only: the numbers go to the job summary and never fail the job.
+      - name: Table benchmark (10k rows)
+        continue-on-error: true
+        timeout-minutes: 5
+        run: xvfb-run -a -s "-screen 0 1600x1000x24" npm --prefix desktop/e2e run bench
+
+      - name: Upload screenshots and logs
+        if: always()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: e2e-screenshots
+          path: desktop/e2e/artifacts/
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Debug info
+        if: failure()
+        run: |
+          kubectl --context kind-kubeloupe-test get pods -A -o wide || true
+          kubectl --context kind-kubeloupe-test get events -A --sort-by=.lastTimestamp | tail -50 || true

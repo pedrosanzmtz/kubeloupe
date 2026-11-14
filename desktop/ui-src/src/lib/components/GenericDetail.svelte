@@ -55,7 +55,7 @@
   const title = $derived(target.namespace ? `${target.namespace}/${target.name}` : target.name);
 </script>
 
-<aside>
+<aside data-testid="detail-panel">
   <div class="header">
     <span class="title"><span class="muted">{target.resource.kind}</span> {title}</span>
     <button type="button" class="close" aria-label="Close details" onclick={closeDetail}>✕</button>
