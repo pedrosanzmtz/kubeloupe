@@ -13,7 +13,15 @@
   import DetailPanel from "./lib/components/DetailPanel.svelte";
   import GenericDetail from "./lib/components/GenericDetail.svelte";
   import { isPod } from "./lib/columns";
-  import { app, currentKind, loadContexts, loadKinds, loadNamespaces } from "./lib/stores/app.svelte";
+  import {
+    app,
+    checkAccess,
+    currentKind,
+    initScope,
+    loadContexts,
+    loadKinds,
+    loadNamespaces,
+  } from "./lib/stores/app.svelte";
   import { detail } from "./lib/stores/detail.svelte";
   import { listenDrain } from "./lib/stores/actions.svelte";
   import { live } from "./lib/stores/live.svelte";
@@ -26,6 +34,7 @@
     (async () => {
       await loadContexts();
       await loadNamespaces();
+      await initScope();
     })();
     return () => {
       unlisten.then((un) => un());
@@ -38,6 +47,12 @@
   $effect(() => {
     void app.refreshNonce;
     untrack(loadKinds);
+  });
+
+  // Access depends on the scope: re-check when the namespace changes.
+  $effect(() => {
+    void app.namespace;
+    untrack(checkAccess);
   });
 
   const kind = $derived(currentKind());

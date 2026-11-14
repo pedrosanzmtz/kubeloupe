@@ -211,7 +211,7 @@
       >
     </div>
     <button type="button" class="btn" disabled={busy} onclick={() => (reviewing = false)}>Back to editing</button>
-    <button type="button" class="btn primary" disabled={busy} onclick={save}>Save</button>
+    <button type="button" class="btn primary" data-testid="yaml-save" disabled={busy} onclick={save}>Save</button>
   {:else}
     {#if isSecret}
       {#if revealed}
@@ -221,7 +221,9 @@
       {/if}
     {/if}
     <button type="button" class="btn" disabled={busy} onclick={() => reloadAsking(revealed)}>Reload</button>
-    <button type="button" class="btn primary" onclick={review} disabled={locked || !dirty || busy}>Review</button>
+    <button type="button" class="btn primary" data-testid="yaml-review" onclick={review} disabled={locked || !dirty || busy}
+      >Review</button
+    >
   {/if}
 </div>
 
@@ -253,6 +255,7 @@
       value={text}
       readonly={locked || !loaded}
       label="{target.resource.kind} YAML"
+      testid="yaml-editor"
       markLine={errorAt}
       onChange={(v) => {
         text = v;
@@ -262,7 +265,7 @@
   {/if}
 </div>
 
-<p class="detail-status muted" aria-live="polite">
+<p class="detail-status muted" data-testid="yaml-status" aria-live="polite">
   {#if reviewing}
     Server-side validation passed. Review the changes, then save.
   {:else}

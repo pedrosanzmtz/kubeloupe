@@ -1,0 +1,17 @@
+{
+  "name": "kubeloupe-e2e",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Real-app E2E tests: the built desktop app on WebKitGTK, driven by tauri-driver, against the kind test cluster. See README.md.",
+  "engines": {
+    "node": ">=22.12.0 <23"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 --test-reporter=spec smoke.test.mjs",
+    "bench": "node bench.mjs"
+  },
+  "devDependencies": {
+    "selenium-webdriver": "4.51.0"
+  }
+}

@@ -6,11 +6,18 @@ import * as __TAURI_EVENT from "@tauri-apps/api/event";
 
 /** Commands */
 export const commands = {
-	cmdListNamespaces: (options?: InvokeOptions) => __TAURI_INVOKE<NamespaceInfo[]>("cmd_list_namespaces", undefined, options),
+	/**
+	 *  The cluster's namespaces, or `null` if the user may not list them (the
+	 *  UI then lets them type one).
+	 */
+	cmdListNamespaces: (options?: InvokeOptions) => __TAURI_INVOKE<NamespaceInfo[] | null>("cmd_list_namespaces", undefined, options),
 	/**  Discover every kind the cluster serves (including CRDs) with its columns. */
 	cmdDiscover: (options?: InvokeOptions) => __TAURI_INVOKE<ResourceKind[]>("cmd_discover", undefined, options),
-	/**  Which of the kinds the current user may list. */
-	cmdCheckAccess: (kinds: ResourceRef[], options?: InvokeOptions) => __TAURI_INVOKE<AccessResult[]>("cmd_check_access", { kinds }, options),
+	/**
+	 *  Which of the kinds the current user may list in `namespace` (`null` =
+	 *  across all namespaces; ignored for cluster-scoped kinds).
+	 */
+	cmdCheckAccess: (kinds: ResourceRef[], namespace: string | null, options?: InvokeOptions) => __TAURI_INVOKE<AccessResult[]>("cmd_check_access", { kinds, namespace }, options),
 	cmdGetPodDetails: (namespace: string, name: string, options?: InvokeOptions) => __TAURI_INVOKE<PodDetail>("cmd_get_pod_details", { namespace, name }, options),
 	cmdStreamPodLogs: (namespace: string, name: string, container: string | null, previous: boolean | null, tailLines: number | null, sinceSeconds: number | null, timestamps: boolean | null, streamId: number, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_stream_pod_logs", { namespace, name, container, previous, tailLines, sinceSeconds, timestamps, streamId }, options),
 	cmdStopPodLogs: (options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_stop_pod_logs", undefined, options),
@@ -32,7 +39,17 @@ export const commands = {
 	 *  and there is no file dialog without an extra plugin, so we write directly.
 	 */
 	cmdSaveLogs: (filename: string, content: string, options?: InvokeOptions) => __TAURI_INVOKE<string>("cmd_save_logs", { filename, content }, options),
-	cmdGetOverview: (options?: InvokeOptions) => __TAURI_INVOKE<Overview>("cmd_get_overview", undefined, options),
+	/**
+	 *  The overview. Parts the user may not see cluster-wide are narrowed to
+	 *  `namespace` (`null` = the context's namespace) or left out.
+	 */
+	cmdGetOverview: (namespace: string | null, options?: InvokeOptions) => __TAURI_INVOKE<Overview_Serialize>("cmd_get_overview", { namespace }, options),
+	/**
+	 *  The namespace to start on: `null` (all namespaces) if the user may list
+	 *  pods cluster-wide, otherwise the context's namespace or the first one
+	 *  they can access.
+	 */
+	cmdDefaultNamespace: (options?: InvokeOptions) => __TAURI_INVOKE<string | null>("cmd_default_namespace", undefined, options),
 	cmdGetMetrics: (options?: InvokeOptions) => __TAURI_INVOKE<MetricsSnapshot>("cmd_get_metrics", undefined, options),
 	/**
 	 *  Start watching a kind (in `namespace`, if it is namespaced). Returns the
@@ -40,7 +57,7 @@ export const commands = {
 	 */
 	cmdWatchStart: (resource: ResourceRef, namespace: string | null, options?: InvokeOptions) => __TAURI_INVOKE<string>("cmd_watch_start", { resource, namespace }, options),
 	cmdWatchStop: (id: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_watch_stop", { id }, options),
-	cmdListContexts: (options?: InvokeOptions) => __TAURI_INVOKE<ContextInfo[]>("cmd_list_contexts", undefined, options),
+	cmdListContexts: (options?: InvokeOptions) => __TAURI_INVOKE<ContextInfo_Serialize[]>("cmd_list_contexts", undefined, options),
 	cmdSetContext: (name: string | null, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_set_context", { name }, options),
 	/**
 	 *  Open an interactive shell in a pod. Returns the session id; output
@@ -196,9 +213,20 @@ export type ContainerInfo = {
 	state: string,
 };
 
-export type ContextInfo = {
+export type ContextInfo = ContextInfo_Serialize | ContextInfo_Deserialize;
+
+export type ContextInfo_Deserialize = {
 	name: string,
 	current: boolean,
+	/**  The context's default namespace (`contexts[].context.namespace`). */
+	namespace?: string | null,
+};
+
+export type ContextInfo_Serialize = {
+	name: string,
+	current: boolean,
+	/**  The context's default namespace (`contexts[].context.namespace`). */
+	namespace: string | null,
 };
 
 /**  Progress of a drain. */
@@ -283,6 +311,11 @@ export type NamespaceInfo = {
 	age: string,
 };
 
+export type NodeCounts = {
+	total: number,
+	ready: number,
+};
+
 export type NodeUsage = {
 	name: string,
 	cpu_millicores: number,
@@ -298,16 +331,39 @@ export type ObjectId = {
 	name: string,
 };
 
-export type Overview = {
-	namespaces: number,
-	nodes: number,
-	nodes_ready: number,
-	pods_total: number,
-	pods_running: number,
-	pods_pending: number,
-	pods_failed: number,
-	pods_by_namespace: ([string, number])[],
-	events: EventInfo[],
+/**
+ *  The overview. Each part is computed on its own: a part the user may not
+ *  see is `None`, with a line in `notes` saying why, so a user with access
+ *  to only some namespaces still gets an overview.
+ */
+export type Overview = Overview_Serialize | Overview_Deserialize;
+
+/**
+ *  The overview. Each part is computed on its own: a part the user may not
+ *  see is `None`, with a line in `notes` saying why, so a user with access
+ *  to only some namespaces still gets an overview.
+ */
+export type Overview_Deserialize = {
+	namespaces?: number | null,
+	nodes?: NodeCounts | null,
+	pods?: PodCounts_Deserialize | null,
+	events?: RecentEvents_Deserialize | null,
+	/**  What is missing or narrowed, and why. */
+	notes: string[],
+};
+
+/**
+ *  The overview. Each part is computed on its own: a part the user may not
+ *  see is `None`, with a line in `notes` saying why, so a user with access
+ *  to only some namespaces still gets an overview.
+ */
+export type Overview_Serialize = {
+	namespaces: number | null,
+	nodes: NodeCounts | null,
+	pods: PodCounts_Serialize | null,
+	events: RecentEvents_Serialize | null,
+	/**  What is missing or narrowed, and why. */
+	notes: string[],
 };
 
 export type OwnerLink = {
@@ -315,6 +371,37 @@ export type OwnerLink = {
 	kind: string,
 	name: string,
 	controller: boolean,
+};
+
+/**  Pod counts, across the cluster or in one namespace. */
+export type PodCounts = PodCounts_Serialize | PodCounts_Deserialize;
+
+/**  Pod counts, across the cluster or in one namespace. */
+export type PodCounts_Deserialize = {
+	/**
+	 *  The namespace these were narrowed to because listing pods across
+	 *  the cluster is forbidden; `None` = the whole cluster.
+	 */
+	namespace?: string | null,
+	total: number,
+	running: number,
+	pending: number,
+	failed: number,
+	by_namespace: ([string, number])[],
+};
+
+/**  Pod counts, across the cluster or in one namespace. */
+export type PodCounts_Serialize = {
+	/**
+	 *  The namespace these were narrowed to because listing pods across
+	 *  the cluster is forbidden; `None` = the whole cluster.
+	 */
+	namespace: string | null,
+	total: number,
+	running: number,
+	pending: number,
+	failed: number,
+	by_namespace: ([string, number])[],
 };
 
 export type PodDetail = {
@@ -360,6 +447,23 @@ export type PodUsage = {
 export type PortForwardInfo = {
 	session: string,
 	local_port: number,
+};
+
+/**  Recent events, across the cluster or in one namespace. */
+export type RecentEvents = RecentEvents_Serialize | RecentEvents_Deserialize;
+
+/**  Recent events, across the cluster or in one namespace. */
+export type RecentEvents_Deserialize = {
+	/**  As in [`PodCounts::namespace`]. */
+	namespace?: string | null,
+	items: EventInfo[],
+};
+
+/**  Recent events, across the cluster or in one namespace. */
+export type RecentEvents_Serialize = {
+	/**  As in [`PodCounts::namespace`]. */
+	namespace: string | null,
+	items: EventInfo[],
 };
 
 export type RelatedEvent = {
@@ -465,7 +569,12 @@ export type WatchState =
  *  The watch failed and is backing off before retrying (it re-lists
  *  by itself when it has to).
  */
-{ state: "reconnecting"; error: string };
+{ state: "reconnecting"; error: string } | 
+/**
+ *  The server refused the list or watch (403). Retrying would not help,
+ *  so the watch stops; `error` is the server's message.
+ */
+{ state: "forbidden"; error: string };
 
 /**  Payload of the `watch-state` event. */
 export type WatchStateChanged = {

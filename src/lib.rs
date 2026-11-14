@@ -3,6 +3,7 @@
 
 // One module per concern. Their items are re-exported at the crate root, so
 // callers keep using `kubeloupe::get_pods`, `kubeloupe::LogOptions`, ...
+mod access;
 mod age;
 mod cli;
 mod client;
@@ -19,6 +20,7 @@ pub mod resources;
 pub mod watch;
 pub mod workload_logs;
 
+pub use access::*;
 pub(crate) use age::*;
 pub use cli::*;
 pub use client::*;

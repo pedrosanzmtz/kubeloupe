@@ -14,6 +14,7 @@
     label,
     onChange = () => {},
     markLine = null,
+    testid,
   }: {
     value: string;
     readonly?: boolean;
@@ -22,6 +23,8 @@
     onChange?: (value: string) => void;
     /** A 1-based line to highlight (an error location), or null. */
     markLine?: number | null;
+    /** `data-testid` of the root element. */
+    testid?: string;
   } = $props();
 
   let host: HTMLDivElement;
@@ -38,7 +41,15 @@
     try {
       const { createEditor } = await import("../../editor/setup");
       if (destroyed) return;
-      editor = createEditor(host, { value, readonly, label, onChange: (v) => onChange(v) });
+      const handle = createEditor(host, { value, readonly, label, onChange: (v) => onChange(v) });
+      editor = handle;
+      // For the real-app E2E tests (WebDriver can't type reliably into
+      // CodeMirror): `el.kubeloupeEditor.setValue(text)` on the root element
+      // edits like typing does, `onChange` included.
+      (host as HTMLDivElement & { kubeloupeEditor?: unknown }).kubeloupeEditor = {
+        getValue: () => handle.getValue(),
+        setValue: (v: string) => handle.setValue(v),
+      };
     } catch (e) {
       loadError = String(e);
     }
@@ -60,7 +71,7 @@
   });
 </script>
 
-<div class="code-editor" bind:this={host} data-ready={editor ? "true" : "false"}>
+<div class="code-editor" bind:this={host} data-ready={editor ? "true" : "false"} data-testid={testid}>
   {#if !editor}
     {#if loadError}
       <p class="error-text">Could not load the editor: {loadError}</p>

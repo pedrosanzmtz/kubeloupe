@@ -19,6 +19,10 @@ export const app = $state({
   search: "",
   contexts: [] as ContextInfo[],
   namespaces: [] as NamespaceInfo[],
+  /** Listing namespaces is forbidden: the namespace control takes free text. */
+  namespacesForbidden: false,
+  /** Namespaces offered when they cannot be listed (context default + typed). */
+  knownNamespaces: [] as string[],
   status: { ok: null, text: "Connecting…" } as Status,
   error: "",
   /** Footer: item count and last update, set by the active view. */
@@ -32,8 +36,10 @@ export const app = $state({
 class Kinds {
   /** Replaced, never mutated: no need for deep reactivity on column defs. */
   all = $state.raw<ResourceKind[]>([]);
-  /** Ids of kinds a SelfSubjectAccessReview denied. */
+  /** Ids of kinds a SelfSubjectAccessReview denied in `deniedScope`. */
   denied = $state.raw(new Set<string>());
+  /** The namespace `denied` was checked in (`""` = all namespaces). */
+  deniedScope = $state("");
   /** Discovery finished (successfully or not). */
   loaded = $state(false);
 }
@@ -67,16 +73,46 @@ export async function loadKinds() {
   kinds.all = found;
   kinds.denied = new Set();
   kinds.loaded = true;
-  // RBAC: grey out what the user cannot list. Best effort, in the background.
+  await checkAccess();
+}
+
+/**
+ * RBAC: grey out what the user cannot list in the current namespace scope.
+ * Best effort; re-run whenever the namespace changes.
+ */
+export async function checkAccess() {
+  const found = kinds.all;
+  const scope = app.namespace;
+  if (found.length === 0) return;
   try {
-    const access = await commands.cmdCheckAccess(found.map((k) => k.resource));
-    // Ignore the answer if a newer discovery replaced this one meanwhile.
-    if (kinds.all === found) {
+    const access = await commands.cmdCheckAccess(
+      found.map((k) => k.resource),
+      scope || null,
+    );
+    // Ignore the answer if discovery or the namespace changed meanwhile.
+    if (kinds.all === found && app.namespace === scope) {
       kinds.denied = new Set(access.filter((a) => !a.allowed).map((a) => a.id));
+      kinds.deniedScope = scope;
     }
   } catch {
     // Without the check everything stays enabled.
   }
+}
+
+/** Why `kind` is greyed out, for its tooltip. */
+export function deniedReason(kind: ResourceKind): string {
+  if (!kind.resource.namespaced) return `You are not allowed to list ${kind.label}`;
+  if (kinds.deniedScope) return `${kind.label}: not allowed in namespace ${kinds.deniedScope}`;
+  return `${kind.label}: not allowed across all namespaces — pick a namespace`;
+}
+
+/**
+ * Whether the sidebar should still open a denied kind: a namespaced kind
+ * denied across all namespaces may be allowed in one, and its view has the
+ * namespace control.
+ */
+export function canOpenDenied(kind: ResourceKind): boolean {
+  return kind.resource.namespaced && !kinds.deniedScope;
 }
 
 /** Open an object in its own kind's view (owner links, related objects). */
@@ -108,12 +144,57 @@ export async function loadContexts() {
   }
 }
 
+/** Typed namespaces, per context, for this session (persisting is #39). */
+const typedNamespaces = new Map<string, string[]>();
+
+function currentContextName(): string {
+  return app.contexts.find((c) => c.current)?.name ?? "";
+}
+
+/** Offer `ns` in the namespace control when namespaces cannot be listed. */
+export function rememberNamespace(ns: string) {
+  if (!ns || app.knownNamespaces.includes(ns)) return;
+  app.knownNamespaces = [...app.knownNamespaces, ns].sort();
+  const ctx = currentContextName();
+  typedNamespaces.set(ctx, [...(typedNamespaces.get(ctx) ?? []), ns]);
+}
+
 export async function loadNamespaces() {
+  let listed: NamespaceInfo[] | null;
   try {
-    app.namespaces = await commands.cmdListNamespaces();
+    listed = await commands.cmdListNamespaces();
   } catch {
     // Namespaces failing usually means the cluster is unreachable;
     // the main view load will surface the error.
+    return;
+  }
+  app.namespaces = listed ?? [];
+  app.namespacesForbidden = listed === null;
+  const ctx = app.contexts.find((c) => c.current);
+  app.knownNamespaces = [];
+  if (listed === null) {
+    for (const ns of [ctx?.namespace ?? "", ...(typedNamespaces.get(ctx?.name ?? "") ?? [])]) {
+      if (ns && !app.knownNamespaces.includes(ns)) app.knownNamespaces.push(ns);
+    }
+    app.knownNamespaces.sort();
+  }
+}
+
+/**
+ * Pick the starting namespace: all namespaces if the user may list pods
+ * cluster-wide, otherwise the context's namespace or the first one they can
+ * access.
+ */
+export async function initScope() {
+  let ns: string | null = null;
+  try {
+    ns = await commands.cmdDefaultNamespace();
+  } catch {
+    // Unreachable cluster: stay on all namespaces; the views report it.
+  }
+  app.namespace = ns ?? "";
+  if (ns && app.namespacesForbidden && !app.knownNamespaces.includes(ns)) {
+    app.knownNamespaces = [...app.knownNamespaces, ns].sort();
   }
 }
 
@@ -142,11 +223,15 @@ export async function switchContext(name: string) {
   closeDetail();
   app.namespace = "";
   app.view = "overview";
+  await loadContexts();
   await loadNamespaces();
+  await initScope();
   refresh();
 }
 
 export function switchNamespace(namespace: string) {
   closeDetail();
+  namespace = namespace.trim();
+  if (app.namespacesForbidden) rememberNamespace(namespace);
   app.namespace = namespace;
 }

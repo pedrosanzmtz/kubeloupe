@@ -26,7 +26,7 @@
       class:error={app.status.ok === false}
       aria-hidden="true"
     ></span>
-    <span>{app.status.text}</span>
+    <span data-testid="connection-status">{app.status.text}</span>
   </div>
   <select
     class="select"
