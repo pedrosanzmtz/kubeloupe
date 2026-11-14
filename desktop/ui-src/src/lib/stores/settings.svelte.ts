@@ -57,15 +57,7 @@ export function detailWidth(): number {
   return clampWidth(settings.current.detail_width, typeof window === "undefined" ? 1600 : window.innerWidth);
 }
 
-/**
- * The dock's remembered height in pixels (`0`: use its default). For the
- * dock (#42): read this when it mounts and call `setDockHeight` when a drag
- * ends.
- */
-export function dockHeight(): number {
-  return settings.current.dock_height;
-}
-
+/** Remember the dock's height (restored by `startApp`). */
 export function setDockHeight(px: number) {
   updateSettings({ dock_height: Math.max(0, Math.round(px)) });
 }

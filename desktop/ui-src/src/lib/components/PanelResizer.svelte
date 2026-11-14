@@ -72,7 +72,7 @@
 <style>
   .resizer {
     width: 5px;
-    margin-right: -5px;
+    margin-left: -5px;
     flex-shrink: 0;
     cursor: col-resize;
     position: relative;

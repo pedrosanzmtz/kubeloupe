@@ -1,9 +1,11 @@
 import { commands } from "../bindings";
 import type { ContextInfo, NamespaceInfo, ResourceKind } from "../bindings";
 import { joinNames, normalizeNamespaces, sameNamespaces } from "../namespaces";
+import { clampHeight } from "../dock";
 import { contextToRestore, namespacesToRestore } from "../settings";
 import { closeDetail, detail, openDetail } from "./detail.svelte";
 import { contextSettings, loadSettings, settings, updateContext, updateSettings } from "./settings.svelte";
+import { closeAllDockTabs, dock } from "./dock.svelte";
 import { whenDiscarded } from "./unsaved.svelte";
 
 /** `"overview"`, or the id of a discovered kind (`apps/v1/deployments`). */
@@ -241,6 +243,9 @@ async function restoreScope() {
  */
 export async function startApp() {
   await loadSettings();
+  // Leave room for the header and the tables, as a drag does.
+  const docked = settings.current.dock_height;
+  if (docked > 0) dock.height = clampHeight(docked, window.innerHeight - 160);
   await loadContexts();
   const remembered = contextToRestore(settings.current.last_context, app.contexts);
   if (remembered) {
@@ -280,6 +285,8 @@ export async function switchContext(name: string) {
     showError("Could not switch context: " + e);
     return;
   }
+  // The backend has stopped every stream and session of the old context.
+  closeAllDockTabs();
   closeDetail();
   app.selectedNamespaces = [];
   app.view = "overview";

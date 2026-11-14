@@ -142,8 +142,9 @@ test("the row menu opens from the keyboard and its items are reachable with arro
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Shift+F10");
   await expect(menu(page).locator(".title")).toHaveText("demo/crashed");
-  await expect(menu(page).getByRole("menuitem", { name: "Delete", exact: true })).toBeFocused();
-  await page.keyboard.press("ArrowDown");
+  // Logs and Shell (dock tabs) come first, then the actions.
+  await expect(menu(page).getByRole("menuitem", { name: "Logs", exact: true })).toBeFocused();
+  for (let i = 0; i < 3; i++) await page.keyboard.press("ArrowDown");
   await expect(menu(page).getByRole("menuitem", { name: "Force delete…" })).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(dialog(page)).toHaveAccessibleName("Force delete Pod");
@@ -198,11 +199,12 @@ test("Ctrl/Cmd+1…9 switch the detail panel tabs", async ({ page }) => {
   const tab = (name: string) => panel(page).getByRole("tab", { name });
   await expect(tab("Overview")).toHaveAttribute("aria-selected", "true");
   await page.keyboard.press("ControlOrMeta+2");
-  await expect(tab("Logs")).toHaveAttribute("aria-selected", "true");
-  await page.keyboard.press("ControlOrMeta+3");
   await expect(tab("YAML")).toHaveAttribute("aria-selected", "true");
-  // There is no fourth tab.
-  await page.keyboard.press("ControlOrMeta+4");
+  await page.keyboard.press("ControlOrMeta+1");
+  await expect(tab("Overview")).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("ControlOrMeta+2");
+  // There is no third tab (logs open in the dock).
+  await page.keyboard.press("ControlOrMeta+3");
   await expect(tab("YAML")).toHaveAttribute("aria-selected", "true");
 });
 
@@ -229,7 +231,7 @@ test("keys are ignored inside the terminal", async ({ page }) => {
   await openKind(page, "Pods");
   await row(page, "web-1").click();
   await panel(page).getByRole("button", { name: "Open terminal" }).click();
-  const term = panel(page).locator(".xterm");
+  const term = page.getByTestId("dock").locator(".xterm");
   await expect(term).toBeVisible();
   await term.click();
   await expect(page.locator(".xterm-helper-textarea")).toBeFocused();
@@ -241,4 +243,11 @@ test("keys are ignored inside the terminal", async ({ page }) => {
   await expect(panel(page)).toBeVisible();
   // The keys went to the shell instead.
   await expect.poll(async () => (await fake.calls("cmdExecInput")).map((c) => c.data).join("")).toContain("?");
+
+  // Except Ctrl+`, which hides the dock from inside the terminal.
+  await page.keyboard.press("Control+Backquote");
+  await expect(term).toBeHidden();
+  await page.keyboard.press("Control+Backquote");
+  await expect(term).toBeVisible();
+  expect(await fake.calls("cmdExecClose")).toHaveLength(0);
 });

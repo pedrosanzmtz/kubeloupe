@@ -14,6 +14,8 @@
   import TableView from "./lib/components/TableView.svelte";
   import DetailPanel from "./lib/components/DetailPanel.svelte";
   import GenericDetail from "./lib/components/GenericDetail.svelte";
+  import Dock from "./lib/components/Dock.svelte";
+  import { dock } from "./lib/stores/dock.svelte";
   import { isPod } from "./lib/columns";
   import {
     app,
@@ -63,7 +65,7 @@
 <svelte:window onkeydowncapture={handleKey} />
 
 <Header />
-<div class="main">
+<div class="main" class:hidden={dock.maximized}>
   <Sidebar />
   <section class="content">
     {#if app.view !== "overview"}
@@ -93,6 +95,7 @@
     {/key}
   {/if}
 </div>
+<Dock />
 <Footer />
 <ActionDialog />
 {#if createUi.open}
@@ -114,6 +117,10 @@
     display: flex;
     flex: 1;
     min-height: 0;
+  }
+  /* A maximized dock covers the tables; they stay mounted. */
+  .main.hidden {
+    display: none;
   }
   .content {
     flex: 1;

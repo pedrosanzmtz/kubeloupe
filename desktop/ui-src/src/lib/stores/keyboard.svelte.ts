@@ -10,6 +10,7 @@ import { bindingFor, inEditorOrTerminal, isActivatable, isMacPlatform, isTextEnt
 import { actionUi } from "./actions.svelte";
 import { createUi } from "./create.svelte";
 import { closeDetail, detail } from "./detail.svelte";
+import { toggleDock } from "./dock.svelte";
 import { unsaved } from "./unsaved.svelte";
 
 export const keyboard = $state({
@@ -110,7 +111,7 @@ export function handleKey(e: KeyboardEvent) {
   const hit = bindingFor(e, mac);
   if (!hit) return;
   const target = e.target instanceof Element ? e.target : document.activeElement;
-  if (inEditorOrTerminal(target)) return;
+  if (inEditorOrTerminal(target) && !(hit.binding.inTerminal && target?.closest(".xterm"))) return;
   if (isTextEntry(target) && !hit.binding.inInputs) return;
   if (modalOpen()) return;
 
@@ -163,6 +164,8 @@ export function handleKey(e: KeyboardEvent) {
     case "deleteRows":
       if (table) done(e, () => table?.deleteRows());
       return;
+    case "toggleDock":
+      return done(e, toggleDock);
     case "detailTab":
       if (tabs && hit.index < tabs.count()) done(e, () => tabs?.select(hit.index));
       return;

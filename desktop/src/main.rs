@@ -8,6 +8,7 @@ use tauri::Manager;
 use tauri_specta::{collect_commands, collect_events, Builder};
 
 mod commands;
+mod log_streams;
 mod settings;
 #[cfg(unix)]
 mod shell_env;
@@ -22,9 +23,8 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::cluster::cmd_discover,
             commands::cluster::cmd_check_access,
             commands::logs::cmd_stream_pod_logs,
-            commands::logs::cmd_stop_pod_logs,
+            commands::logs::cmd_stop_logs,
             commands::logs::cmd_stream_workload_logs,
-            commands::logs::cmd_stop_workload_logs,
             commands::logs::cmd_save_logs,
             commands::overview::cmd_overview_start,
             commands::overview::cmd_overview_stop,
@@ -96,7 +96,7 @@ fn main() {
         .manage(AppState {
             context: Mutex::new(None),
             client: tokio::sync::Mutex::new(None),
-            log_task: Mutex::new(None),
+            log_streams: Default::default(),
             exec_sessions: Mutex::new(HashMap::new()),
             forwards: Mutex::new(HashMap::new()),
             watches: Mutex::new(HashMap::new()),

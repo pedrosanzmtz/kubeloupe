@@ -9,7 +9,6 @@
   import type { LogContainer, WorkloadNotice } from "../bindings";
   import { LogBuffer, LOG_BUFFER_MAX, linePrefix, logMatches, podColor, splitHighlights } from "../logs";
   import type { TaggedText, WorkloadRef } from "../logs";
-  import { detail } from "../stores/detail.svelte";
   import type { PodRef } from "../stores/detail.svelte";
   import { settings } from "../stores/settings.svelte";
   import { TAIL_OPTIONS } from "../settings";
@@ -22,11 +21,13 @@
     /** Containers of the pod; the stream starts once `ready`. Unused for workloads. */
     containers?: LogContainer[];
     ready?: boolean;
+    /** An inactive dock tab: lines are buffered, not rendered, until shown. */
+    hidden?: boolean;
   }
 
-  let { pod, workload, containers = [], ready = true }: Props = $props();
+  let { pod, workload, containers = [], ready = true, hidden = false }: Props = $props();
   const isWorkload = $derived(workload !== undefined);
-  const title = $derived(workload ? `${workload.namespace}/${workload.name}` : "");
+  const title = $derived(workload ? `${workload.namespace}/${workload.name}` : pod ? `${pod.namespace}/${pod.name}` : "");
 
   interface Line {
     id: number;
@@ -81,6 +82,8 @@
   // Events carry the id of their stream; ids only grow, so a straggler from a
   // replaced stream never matches.
   let streamId = ++streamCounter;
+  /** Whether `streamId` has been started (and must be stopped). */
+  let streaming = false;
 
   const filterLower = $derived(filter.toLowerCase());
   const count = $derived.by(() => {
@@ -115,6 +118,11 @@
 
   /** Append a system message (error, "stream ended"); it is not in the buffer. */
   function appendLog(text: string, cls?: string) {
+    // Lines that came before it go first.
+    if (pending.length > 0) {
+      cancelAnimationFrame(raf);
+      flush();
+    }
     const atBottom = isAtBottom();
     d.lines.push({ id: nextLineId++, text, cls });
     rev++;
@@ -167,6 +175,19 @@
     followIfNeeded(atBottom);
   }
 
+  /** Queue lines for the next frame; a hidden tab only renders when shown. */
+  function schedule() {
+    if (hidden) {
+      // Only the newest LOG_BUFFER_MAX can end up on screen anyway.
+      if (pending.length > LOG_BUFFER_MAX + LOG_BUFFER_MAX / 10) {
+        pending.splice(0, pending.length - LOG_BUFFER_MAX);
+        pendingTags.splice(0, pendingTags.length - LOG_BUFFER_MAX);
+      }
+      return;
+    }
+    if (!raf) raf = requestAnimationFrame(flush);
+  }
+
   function onBatch(lines: string[]) {
     buf.push(lines);
     if (paused) {
@@ -177,7 +198,7 @@
       pending.push(l);
       pendingTags.push(0);
     }
-    if (!raf) raf = requestAnimationFrame(flush);
+    schedule();
   }
 
   /** Remember a pod/container of a workload stream (for the pickers and prefixes). */
@@ -211,7 +232,7 @@
       pending.push(buf.lines[i]);
       pendingTags.push(buf.tagIds[i]);
     }
-    if (!raf) raf = requestAnimationFrame(flush);
+    schedule();
   }
 
   function onNotice(n: WorkloadNotice) {
@@ -267,7 +288,12 @@
   async function startLogs() {
     resetLogs();
     setPaused(false);
+    // Each tab owns its stream: stop the one it replaces (it counts towards
+    // the backend's cap until then).
+    const old = streaming ? streamId : null;
     streamId = ++streamCounter;
+    streaming = true;
+    if (old !== null) await commands.cmdStopLogs(old).catch(() => {});
     try {
       if (workload) {
         podStates = {};
@@ -378,23 +404,18 @@
     clearTimeout(filterTimer);
     const ownStream = streamId;
     streamId = ++streamCounter;
-    if (isWorkload) {
-      // Stops our stream only: a viewer that replaced it keeps its own.
-      commands.cmdStopWorkloadLogs(ownStream).catch(() => {});
-      return;
-    }
-    // When another pod replaced this one, its stream start already stops ours;
-    // stopping here could race with it and kill the new stream. Decide after
-    // the current update has settled: during teardown `detail.pod` may still
-    // hold the previous value.
-    queueMicrotask(() => {
-      if (!detail.pod) commands.cmdStopPodLogs().catch(() => {});
-    });
+    // Stops this tab's stream only; the other tabs keep theirs.
+    if (streaming) commands.cmdStopLogs(ownStream).catch(() => {});
+  });
+
+  // A tab that is shown again renders what arrived while it was hidden.
+  $effect(() => {
+    if (!hidden && pending.length > 0 && !raf) raf = requestAnimationFrame(flush);
   });
 </script>
 
 <div class="logs-header section-header">
-  <h3>Logs{#if isWorkload}<span class="muted"> · {title}</span>{/if}</h3>
+  <h3>Logs<span class="muted"> · {title}</span></h3>
   <label class="check"><input type="checkbox" bind:checked={follow} /> Follow</label>
   <button type="button" class="btn" class:active={paused} onclick={() => setPaused(!paused)}>
     {paused ? "Resume" : "Pause"}
@@ -515,9 +536,8 @@
   .output {
     display: flex;
     flex-direction: column;
-    flex: none;
-    height: 200px;
-    min-height: 120px;
+    flex: 1;
+    min-height: 40px;
     background: #0d1013;
     color: #d6dae0;
     border-top: 1px solid var(--border);

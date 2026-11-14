@@ -6,6 +6,8 @@
   import { replicasFromRow } from "../actions";
   import { rangeKeys } from "../selection";
   import { requestAction } from "../stores/actions.svelte";
+  import { dockMenuFor } from "../dock";
+  import { openDockTab } from "../stores/dock.svelte";
   import { registerTable } from "../stores/keyboard.svelte";
   import type { RowMove } from "../stores/keyboard.svelte";
   import type { ResourceKind } from "../bindings";
@@ -124,12 +126,19 @@
     } else {
       title = row.namespace ? `${row.namespace}/${row.name}` : row.name;
       const keys = kind.columns.map((c) => c.key);
-      items = kind.actions.map((a) => ({
-        label: a.label,
-        danger: a.destructive,
-        run: () =>
-          requestAction(kind, [{ namespace: row.namespace, name: row.name }], a, replicasFromRow(row, keys)),
-      }));
+      // Logs and Shell open dock tabs; the rest come from the action registry.
+      items = [
+        ...dockMenuFor(kind.resource, row.namespace, row.name).map((d) => ({
+          label: d.label,
+          run: () => openDockTab(d.spec),
+        })),
+        ...kind.actions.map((a) => ({
+          label: a.label,
+          danger: a.destructive,
+          run: () =>
+            requestAction(kind, [{ namespace: row.namespace, name: row.name }], a, replicasFromRow(row, keys)),
+        })),
+      ];
     }
     menu = items.length > 0 ? { x, y, title, items } : null;
   }
@@ -342,6 +351,11 @@
   .grid {
     flex: 1;
     min-height: 0;
+    min-width: 0;
+    /* Columns wider than the table are cut off here, like the rows in the
+       scroller. Without the clip the header labels overflow into the detail
+       panel and, being text, paint over its background (#57). */
+    overflow: hidden;
     display: flex;
     flex-direction: column;
     outline: none;

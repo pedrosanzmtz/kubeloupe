@@ -9,6 +9,8 @@ import { app, canOpenDenied, kinds, refresh, setView, switchContext, switchNames
 import { requestAction } from "./actions.svelte";
 import { openCreate } from "./create.svelte";
 import { openDetail } from "./detail.svelte";
+import { dockMenuFor } from "../dock";
+import { dock, openDockTab, toggleDock } from "./dock.svelte";
 import { activeTable, openHelp, openSettings } from "./keyboard.svelte";
 import { whenDiscarded } from "./unsaved.svelte";
 
@@ -37,6 +39,15 @@ export function paletteItems(): PaletteItem[] {
       run: openSettings,
     },
   ];
+  if (dock.tabs.length > 0) {
+    items.push({
+      id: "cmd:dock",
+      group: "Command",
+      label: dock.expanded ? "Hide the dock" : "Show the dock",
+      terms: ["dock", "logs", "terminal", "panel"],
+      run: toggleDock,
+    });
+  }
 
   const table = activeTable();
   if (table) {
@@ -54,6 +65,17 @@ export function paletteItems(): PaletteItem[] {
         });
       }
     } else if (targets.length === 1) {
+      const t = targets[0];
+      for (const d of dockMenuFor(kind.resource, t.namespace, t.name)) {
+        items.push({
+          id: `dock:${d.label}`,
+          group: "Action",
+          label: d.label,
+          detail: targetLabel(t),
+          terms: d.label === "Shell" ? ["terminal", "exec"] : ["tail"],
+          run: () => openDockTab(d.spec),
+        });
+      }
       const keys = kind.columns.map((c) => c.key);
       for (const a of kind.actions) {
         items.push({

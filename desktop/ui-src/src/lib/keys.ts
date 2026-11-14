@@ -17,6 +17,7 @@ export type Command =
   | "rowMenu"
   | "deleteRows"
   | "detailTab"
+  | "toggleDock"
   | "escape";
 
 export interface Key {
@@ -24,6 +25,8 @@ export interface Key {
   key: string;
   /** Cmd on macOS, Ctrl elsewhere. */
   mod?: boolean;
+  /** The Ctrl key on every platform (Cmd+` switches windows on macOS). */
+  ctrl?: boolean;
   shift?: boolean;
   /** Only on macOS (true) or only elsewhere (false). */
   mac?: boolean;
@@ -39,6 +42,8 @@ export interface Binding {
   display?: string[];
   /** Also fires from text inputs (never from the YAML editor or the terminal). */
   inInputs?: boolean;
+  /** Also fires from the terminal, which otherwise keeps every key. */
+  inTerminal?: boolean;
 }
 
 const digits = Array.from({ length: 9 }, (_, i) => ({ key: String(i + 1), mod: true }));
@@ -93,6 +98,16 @@ export const KEYMAP: Binding[] = [
     label: "Switch detail panel tab",
     group: "Detail panel",
   },
+  {
+    command: "toggleDock",
+    keys: [{ key: "`", ctrl: true }],
+    label: "Show or hide the dock (logs and terminals)",
+    group: "General",
+    inInputs: true,
+    // Like an editor's terminal panel: the one key a shell gives up, so the
+    // dock can be hidden from inside it. Ctrl+` would only send a NUL byte.
+    inTerminal: true,
+  },
 ];
 
 export function isMacPlatform(): boolean {
@@ -110,6 +125,7 @@ export interface KeyEventLike {
 
 function matchesKey(e: KeyEventLike, k: Key, mac: boolean): boolean {
   if (k.mac !== undefined && k.mac !== mac) return false;
+  if (k.ctrl) return e.ctrlKey && !e.metaKey && !e.altKey && e.key === k.key;
   const modDown = mac ? e.metaKey : e.ctrlKey;
   const otherDown = mac ? e.ctrlKey : e.metaKey;
   if (!!k.mod !== modDown || otherDown || e.altKey) return false;
@@ -141,7 +157,7 @@ const KEY_NAMES: Record<string, string> = {
 /** "Ctrl+K" / "⌘K": one key as the help overlay shows it. */
 export function formatKey(k: Key, mac: boolean): string {
   const name = KEY_NAMES[k.key] ?? (k.key.length === 1 ? k.key.toUpperCase() : k.key);
-  const parts = [k.mod ? (mac ? "⌘" : "Ctrl") : "", k.shift ? (mac ? "⇧" : "Shift") : "", name].filter(Boolean);
+  const parts = [k.mod ? (mac ? "⌘" : "Ctrl") : "", k.ctrl ? (mac ? "⌃" : "Ctrl") : "", k.shift ? (mac ? "⇧" : "Shift") : "", name].filter(Boolean);
   return parts.join(mac ? "" : "+");
 }
 
@@ -151,7 +167,7 @@ export function formatBinding(b: Binding, mac: boolean): string[] {
   // `?` is typed with Shift anyway; lower-case letters read better as typed.
   return b.keys
     .filter((k) => k.mac === undefined || k.mac === mac)
-    .map((k) => (!k.mod && k.key.length === 1 && k.key !== " " ? k.key : formatKey(k, mac)));
+    .map((k) => (!k.mod && !k.ctrl && k.key.length === 1 && k.key !== " " ? k.key : formatKey(k, mac)));
 }
 
 /** Where typing goes: shortcuts stay out of the way there. */

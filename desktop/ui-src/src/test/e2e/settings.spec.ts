@@ -148,9 +148,10 @@ test("the Settings page sets the theme and the log defaults", async ({ page }) =
   // New log viewers start from the defaults.
   await openKind(page, "Pods");
   await row(page, "web-1").click();
-  const panel = page.getByTestId("detail-panel");
-  await expect(panel.getByRole("checkbox", { name: "Timestamps" })).toBeChecked();
-  await expect(panel.getByTitle("Tail lines")).toHaveValue("1000");
+  await page.getByTestId("detail-panel").getByRole("button", { name: "Logs", exact: true }).click();
+  const logs = page.getByTestId("dock");
+  await expect(logs.getByRole("checkbox", { name: "Timestamps" })).toBeChecked();
+  await expect(logs.getByTitle("Tail lines")).toHaveValue("1000");
   await expect.poll(async () => (await fake.lastCall("cmdStreamPodLogs")).tailLines).toBe(1000);
 
   // Dark, from the keyboard shortcut this time.
@@ -195,4 +196,25 @@ test("the detail panel width is resizable and remembered", async ({ page }) => {
   await page.getByTestId("panel-resizer").focus();
   await page.keyboard.press("ArrowRight");
   await expect.poll(async () => Math.round((await panel.boundingBox())!.width)).toBe(after - 16);
+});
+
+test("the dock height is remembered", async ({ page }) => {
+  await openApp(page);
+  await openKind(page, "Pods");
+  await row(page, "web-1").click();
+  await page.getByTestId("detail-panel").getByRole("button", { name: "Logs", exact: true }).click();
+  const dock = page.getByTestId("dock");
+  const before = Math.round((await dock.boundingBox())!.height);
+  const handle = (await page.getByTestId("dock-resizer").boundingBox())!;
+  await page.mouse.move(handle.x + 200, handle.y + handle.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(handle.x + 200, handle.y - 100, { steps: 5 });
+  await page.mouse.up();
+  await expect.poll(async () => Math.round((await dock.boundingBox())!.height)).toBeGreaterThan(before + 80);
+  const after = Math.round((await dock.boundingBox())!.height);
+
+  await restart(page);
+  await row(page, "web-1").click();
+  await page.getByTestId("detail-panel").getByRole("button", { name: "Logs", exact: true }).click();
+  await expect.poll(async () => Math.round((await dock.boundingBox())!.height)).toBe(after);
 });

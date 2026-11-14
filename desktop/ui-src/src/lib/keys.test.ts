@@ -52,6 +52,14 @@ describe("bindingFor", () => {
     expect(command(press("Backspace", { ctrlKey: true }))).toBeNull();
   });
 
+  it("toggles the dock with Ctrl+` on every platform", () => {
+    expect(command(press("`", { ctrlKey: true }))).toBe("toggleDock");
+    expect(command(press("`", { ctrlKey: true }), true)).toBe("toggleDock");
+    // Cmd+` switches windows on macOS.
+    expect(command(press("`", { metaKey: true }), true)).toBeNull();
+    expect(command(press("`"))).toBeNull();
+  });
+
   it("leaves Space with Shift alone", () => {
     expect(command(press(" "))).toBe("toggleRow");
     expect(command(press(" ", { shiftKey: true }))).toBeNull();
@@ -69,6 +77,8 @@ describe("formatBinding", () => {
     expect(formatBinding(of("deleteRows"), false)).toEqual(["Delete"]);
     expect(formatBinding(of("deleteRows"), true)).toEqual(["Delete", "⌘Backspace"]);
     expect(formatBinding(of("toggleRow"), false)).toEqual(["Space"]);
+    expect(formatBinding(of("toggleDock"), false)).toEqual(["Ctrl+`"]);
+    expect(formatBinding(of("toggleDock"), true)).toEqual(["⌃`"]);
   });
 
   it("covers every binding with a label", () => {
