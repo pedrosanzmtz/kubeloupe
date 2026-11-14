@@ -36,6 +36,18 @@ streaming logs and watching cluster state.
   run a command in a pod and print its output
 - `kubeloupe port-forward <pod> <port> [-n <namespace>]` — forward a pod
   port to localhost until Ctrl-C
+- Actions (errors come back in plain words: not allowed, already gone, blocked
+  by a PodDisruptionBudget):
+  - `kubeloupe scale <deploy|sts|rs>/<name> --replicas N [-n <namespace>]`
+  - `kubeloupe restart <deploy|sts|ds>/<name> [-n <namespace>]` — rollout restart
+  - `kubeloupe cordon <node>` / `uncordon <node>`
+  - `kubeloupe drain <node> [--timeout SECS] [--pod-selector SEL]` — cordon, then
+    evict pods through the Eviction API with progress output; skips DaemonSet
+    and mirror pods, retries evictions a PodDisruptionBudget refuses
+  - `kubeloupe trigger cronjob/<name>`, `suspend cronjob/<name>`,
+    `resume cronjob/<name>`
+  - `kubeloupe delete <kind>/<name> [-n <namespace>] [--force]` — `--force`
+    (pods only) uses grace period 0
 
 ## Desktop app
 

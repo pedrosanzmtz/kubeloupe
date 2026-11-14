@@ -3,6 +3,8 @@
   import Header from "./lib/components/Header.svelte";
   import Sidebar from "./lib/components/Sidebar.svelte";
   import ErrorBanner from "./lib/components/ErrorBanner.svelte";
+  import ActionDialog from "./lib/components/ActionDialog.svelte";
+  import ActionNotice from "./lib/components/ActionNotice.svelte";
   import Footer from "./lib/components/Footer.svelte";
   import Toolbar from "./lib/components/Toolbar.svelte";
   import Overview from "./lib/components/Overview.svelte";
@@ -12,18 +14,21 @@
   import { isPod } from "./lib/columns";
   import { app, currentKind, loadContexts, loadKinds, loadNamespaces } from "./lib/stores/app.svelte";
   import { detail } from "./lib/stores/detail.svelte";
+  import { listenDrain } from "./lib/stores/actions.svelte";
   import { live } from "./lib/stores/live.svelte";
 
   onMount(() => {
     // Subscribe before the first watch starts; events that still race ahead
     // of cmd_watch_start's reply are buffered by the live store.
     const unlisten = live.listen();
+    const unlistenDrain = listenDrain();
     (async () => {
       await loadContexts();
       await loadNamespaces();
     })();
     return () => {
       unlisten.then((un) => un());
+      unlistenDrain.then((un) => un());
     };
   });
 
@@ -45,6 +50,7 @@
       <Toolbar />
     {/if}
     <ErrorBanner />
+    <ActionNotice />
     {#if app.view === "overview"}
       <Overview />
     {:else if kind}
@@ -65,6 +71,7 @@
   {/if}
 </div>
 <Footer />
+<ActionDialog />
 
 <style>
   .main {

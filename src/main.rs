@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use kubeloupe::actions::{cli_action, cli_delete, cli_drain, ActionId, DrainOptions};
 use kubeloupe::{
     client, exec_in_pod, list_namespaces, list_nodes, list_pods, parse_log_target, print_get,
     print_pod_logs, print_pod_yaml, print_top_nodes, print_top_pods, print_workload_logs,
@@ -68,6 +69,68 @@ enum Commands {
         /// What to show: pods or nodes
         #[arg(default_value = "pods")]
         resource: String,
+    },
+    /// Set the replica count of a Deployment, StatefulSet or ReplicaSet
+    Scale {
+        /// `<kind>/<name>`, e.g. `deploy/web`
+        target: String,
+        #[arg(long)]
+        replicas: i32,
+        /// Namespace (default: `default`)
+        #[arg(short, long)]
+        namespace: Option<String>,
+    },
+    /// Restart the pods of a Deployment, StatefulSet or DaemonSet
+    Restart {
+        /// `<kind>/<name>`, e.g. `deploy/web`
+        target: String,
+        #[arg(short, long)]
+        namespace: Option<String>,
+    },
+    /// Mark a node unschedulable
+    Cordon { node: String },
+    /// Mark a node schedulable again
+    Uncordon { node: String },
+    /// Cordon a node and evict its pods (respects PodDisruptionBudgets)
+    Drain {
+        node: String,
+        /// Give up after this many seconds
+        #[arg(long, default_value_t = 300)]
+        timeout: u64,
+        /// Only evict pods matching this label selector
+        #[arg(long)]
+        pod_selector: Option<String>,
+    },
+    /// Create a Job from a CronJob now
+    Trigger {
+        /// `cronjob/<name>`
+        target: String,
+        #[arg(short, long)]
+        namespace: Option<String>,
+    },
+    /// Suspend a CronJob
+    Suspend {
+        /// `cronjob/<name>`
+        target: String,
+        #[arg(short, long)]
+        namespace: Option<String>,
+    },
+    /// Resume a suspended CronJob
+    Resume {
+        /// `cronjob/<name>`
+        target: String,
+        #[arg(short, long)]
+        namespace: Option<String>,
+    },
+    /// Delete an object of any kind
+    Delete {
+        /// `<kind>/<name>`
+        target: String,
+        #[arg(short, long)]
+        namespace: Option<String>,
+        /// Grace period 0, for pods stuck terminating (pods only)
+        #[arg(long)]
+        force: bool,
     },
     /// Print a pod as YAML
     Yaml {
@@ -159,6 +222,96 @@ async fn main() -> Result<()> {
             "nodes" => print_top_nodes(&client).await?,
             other => anyhow::bail!("unknown resource for top: {other} (use pods or nodes)"),
         },
+        Commands::Scale {
+            target,
+            replicas,
+            namespace,
+        } => {
+            cli_action(
+                &client,
+                &target,
+                namespace.as_deref(),
+                ActionId::Scale,
+                Some(replicas),
+            )
+            .await?
+        }
+        Commands::Restart { target, namespace } => {
+            cli_action(
+                &client,
+                &target,
+                namespace.as_deref(),
+                ActionId::Restart,
+                None,
+            )
+            .await?
+        }
+        Commands::Cordon { node } => {
+            cli_action(
+                &client,
+                &format!("node/{node}"),
+                None,
+                ActionId::Cordon,
+                None,
+            )
+            .await?
+        }
+        Commands::Uncordon { node } => {
+            cli_action(
+                &client,
+                &format!("node/{node}"),
+                None,
+                ActionId::Uncordon,
+                None,
+            )
+            .await?
+        }
+        Commands::Drain {
+            node,
+            timeout,
+            pod_selector,
+        } => {
+            let opts = DrainOptions {
+                timeout: std::time::Duration::from_secs(timeout),
+                pod_selector,
+            };
+            cli_drain(&client, &node, &opts).await?
+        }
+        Commands::Trigger { target, namespace } => {
+            cli_action(
+                &client,
+                &target,
+                namespace.as_deref(),
+                ActionId::Trigger,
+                None,
+            )
+            .await?
+        }
+        Commands::Suspend { target, namespace } => {
+            cli_action(
+                &client,
+                &target,
+                namespace.as_deref(),
+                ActionId::Suspend,
+                None,
+            )
+            .await?
+        }
+        Commands::Resume { target, namespace } => {
+            cli_action(
+                &client,
+                &target,
+                namespace.as_deref(),
+                ActionId::Resume,
+                None,
+            )
+            .await?
+        }
+        Commands::Delete {
+            target,
+            namespace,
+            force,
+        } => cli_delete(&client, &target, namespace.as_deref(), force).await?,
         Commands::Yaml { name, namespace } => {
             print_pod_yaml(&client, namespace.as_deref(), &name).await?
         }

@@ -16,6 +16,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use tokio::io::AsyncReadExt;
 
+pub mod actions;
 pub mod resources;
 pub mod watch;
 pub mod workload_logs;

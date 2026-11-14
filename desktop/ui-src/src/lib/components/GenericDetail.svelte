@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import ActionBar from "./ActionBar.svelte";
   import YamlEditor from "./YamlEditor.svelte";
   import LogViewer from "./LogViewer.svelte";
   import { WORKLOAD_KINDS } from "../logs";
@@ -28,10 +29,6 @@
   ]);
   let tab = $state("overview");
 
-  let confirmDelete = $state(false);
-  let deleting = $state(false);
-  let deleteError = $state("");
-
   async function load() {
     try {
       info = await commands.cmdGetResourceDetail(target.resource, target.namespace, target.name);
@@ -42,19 +39,6 @@
   }
 
   onMount(load);
-
-  async function remove() {
-    deleting = true;
-    deleteError = "";
-    try {
-      await commands.cmdDeleteResource(target.resource, target.namespace, target.name);
-      closeDetail();
-    } catch (e) {
-      deleteError = "Could not delete: " + e;
-      deleting = false;
-      confirmDelete = false;
-    }
-  }
 
   /** The kind an owner reference points at, if discovery knows it. */
   function ownerKind(o: OwnerLink) {
@@ -76,6 +60,8 @@
     <span class="title"><span class="muted">{target.resource.kind}</span> {title}</span>
     <button type="button" class="close" aria-label="Close details" onclick={closeDetail}>✕</button>
   </div>
+
+  <ActionBar {target} />
 
   <div class="tabs" role="tablist">
     {#each tabs as t (t.id)}
@@ -208,23 +194,6 @@
         {/if}
       {/if}
     </div>
-
-    <div class="section-header">
-      <h3>Delete</h3>
-      {#if confirmDelete}
-        <button type="button" class="btn" disabled={deleting} onclick={() => (confirmDelete = false)}>
-          Cancel
-        </button>
-        <button type="button" class="btn danger" disabled={deleting} onclick={remove}>
-          {deleting ? "Deleting…" : "Confirm delete"}
-        </button>
-      {:else}
-        <button type="button" class="btn danger" onclick={() => (confirmDelete = true)}>
-          Delete {target.resource.kind}
-        </button>
-      {/if}
-    </div>
-    {#if deleteError}<p class="detail-status error-text">{deleteError}</p>{/if}
   {:else if tab === "logs" && isWorkload}
     <LogViewer {workload} />
   {:else if tab === "yaml"}
@@ -388,13 +357,5 @@
   .bad,
   .warn {
     color: var(--amber);
-  }
-  .btn.danger {
-    border-color: var(--red);
-    color: #f5a3a5;
-  }
-  .btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
   }
 </style>

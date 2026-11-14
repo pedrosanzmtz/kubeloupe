@@ -3,6 +3,7 @@
 use futures::SinkExt;
 use kube::api::TerminalSize;
 use kube::Client;
+use kubeloupe::actions::{self, ActionId, BulkItemResult, DrainEvent, DrainSummary};
 use kubeloupe::resources::{
     self, AccessResult, ResourceDetail, ResourceKind, ResourceRef, ResourceRow,
 };
@@ -18,7 +19,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use tauri_specta::{collect_commands, collect_events, Builder, Event};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -63,6 +64,8 @@ struct AppState {
     watches: Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>,
     /// What the last discovery found, so watches can look up their columns.
     kinds: Mutex<Vec<ResourceKind>>,
+    /// Running node drains, by drain id.
+    drains: Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>,
 }
 
 fn selected_context(state: &State<'_, AppState>) -> Option<String> {
@@ -887,7 +890,126 @@ async fn cmd_delete_resource(
     let client = client(&state).await?;
     resources::delete_resource(&client, &resource, &namespace, &name)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| actions::describe_error(&e))
+}
+
+/// Run one action (everything except drain) on one object. Returns a short
+/// summary. The change reaches the table through the live watch. Errors are
+/// plain-words sentences ready to show inline.
+#[tauri::command]
+#[specta::specta]
+async fn cmd_run_action(
+    state: State<'_, AppState>,
+    resource: ResourceRef,
+    namespace: String,
+    name: String,
+    action: ActionId,
+    replicas: Option<i32>,
+) -> Result<String, String> {
+    let client = client(&state).await?;
+    actions::run_action(&client, &resource, &namespace, &name, action, replicas)
+        .await
+        .map_err(|e| actions::describe_error(&e))
+}
+
+/// One object of a bulk delete.
+#[derive(Debug, Clone, Deserialize, Type)]
+struct ObjectId {
+    /// Empty for cluster-scoped kinds.
+    namespace: String,
+    name: String,
+}
+
+/// Delete many objects of one kind. Every object is attempted; the result
+/// has one entry per object with its error, if any.
+#[tauri::command]
+#[specta::specta]
+async fn cmd_bulk_delete(
+    state: State<'_, AppState>,
+    resource: ResourceRef,
+    items: Vec<ObjectId>,
+) -> Result<Vec<BulkItemResult>, String> {
+    let client = client(&state).await?;
+    let items: Vec<(String, String)> = items.into_iter().map(|i| (i.namespace, i.name)).collect();
+    Ok(actions::delete_many(&client, &resource, &items).await)
+}
+
+/// Progress of a node drain started by `cmd_drain_node`.
+#[derive(Debug, Clone, Serialize, Type, Event)]
+#[serde(rename_all = "camelCase")]
+struct DrainProgress {
+    drain_id: String,
+    event: DrainEvent,
+}
+
+/// A node drain ended. `error` is empty when it ran to the end (see
+/// `summary`) and says why not otherwise (for instance 403 on cordon).
+#[derive(Debug, Clone, Serialize, Type, Event)]
+#[serde(rename_all = "camelCase")]
+struct DrainFinished {
+    drain_id: String,
+    summary: DrainSummary,
+    error: String,
+}
+
+/// Cordon a node and evict its pods in the background. Progress arrives as
+/// `DrainProgress` events and the end as `DrainFinished`; returns the drain id.
+#[tauri::command]
+#[specta::specta]
+async fn cmd_drain_node(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    node: String,
+    timeout_secs: u32,
+) -> Result<String, String> {
+    let client = client(&state).await?;
+    let drain_id = next_session("drain");
+    let id = drain_id.clone();
+    let handle = tauri::async_runtime::spawn(async move {
+        let emitter = app.clone();
+        let progress_id = id.clone();
+        let result = actions::drain_node(
+            &client,
+            &node,
+            &actions::DrainOptions::new(Duration::from_secs(timeout_secs.into())),
+            move |event| {
+                let _ = DrainProgress {
+                    drain_id: progress_id.clone(),
+                    event,
+                }
+                .emit(&emitter);
+            },
+        )
+        .await;
+        let (summary, error) = match result {
+            Ok(s) => (s, String::new()),
+            Err(e) => (DrainSummary::default(), actions::describe_error(&e)),
+        };
+        app.state::<AppState>().drains.lock().unwrap().remove(&id);
+        let _ = DrainFinished {
+            drain_id: id,
+            summary,
+            error,
+        }
+        .emit(&app);
+    });
+    state
+        .drains
+        .lock()
+        .unwrap()
+        .insert(drain_id.clone(), handle);
+    Ok(drain_id)
+}
+
+/// Stop following a drain. Pods already evicted stay evicted and the node
+/// stays cordoned.
+#[tauri::command]
+#[specta::specta]
+async fn cmd_cancel_drain(state: State<'_, AppState>, drain_id: String) -> Result<(), String> {
+    if let Some(h) = state.drains.lock().unwrap().remove(&drain_id) {
+        h.abort();
+    }
+    Ok(())
 }
 
 /// The typed command and event registry. Also used to generate
@@ -919,7 +1041,11 @@ fn specta_builder() -> Builder<tauri::Wry> {
             cmd_get_resource_detail,
             cmd_get_resource_yaml,
             cmd_apply_resource_yaml,
-            cmd_delete_resource
+            cmd_delete_resource,
+            cmd_run_action,
+            cmd_bulk_delete,
+            cmd_drain_node,
+            cmd_cancel_drain
         ])
         .events(collect_events![
             WatchBatch,
@@ -930,7 +1056,9 @@ fn specta_builder() -> Builder<tauri::Wry> {
             WorkloadLog,
             WorkloadNotice,
             ExecOutput,
-            ExecClosed
+            ExecClosed,
+            DrainProgress,
+            DrainFinished
         ])
         // Counters and epoch seconds stay far below 2^53.
         .dangerously_cast_bigints_to_number()
@@ -959,6 +1087,7 @@ fn main() {
             forwards: Mutex::new(HashMap::new()),
             watches: Mutex::new(HashMap::new()),
             kinds: Mutex::new(Vec::new()),
+            drains: Mutex::new(HashMap::new()),
         })
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {

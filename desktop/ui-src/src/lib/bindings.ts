@@ -61,10 +61,33 @@ export const commands = {
 	cmdGetResourceYaml: (resource: ResourceRef, namespace: string, name: string, reveal: boolean, options?: InvokeOptions) => __TAURI_INVOKE<string>("cmd_get_resource_yaml", { resource, namespace, name, reveal }, options),
 	cmdApplyResourceYaml: (resource: ResourceRef, namespace: string, name: string, yaml: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_apply_resource_yaml", { resource, namespace, name, yaml }, options),
 	cmdDeleteResource: (resource: ResourceRef, namespace: string, name: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_delete_resource", { resource, namespace, name }, options),
+	/**
+	 *  Run one action (everything except drain) on one object. Returns a short
+	 *  summary. The change reaches the table through the live watch. Errors are
+	 *  plain-words sentences ready to show inline.
+	 */
+	cmdRunAction: (resource: ResourceRef, namespace: string, name: string, action: ActionId, replicas: number | null, options?: InvokeOptions) => __TAURI_INVOKE<string>("cmd_run_action", { resource, namespace, name, action, replicas }, options),
+	/**
+	 *  Delete many objects of one kind. Every object is attempted; the result
+	 *  has one entry per object with its error, if any.
+	 */
+	cmdBulkDelete: (resource: ResourceRef, items: ObjectId[], options?: InvokeOptions) => __TAURI_INVOKE<BulkItemResult[]>("cmd_bulk_delete", { resource, items }, options),
+	/**
+	 *  Cordon a node and evict its pods in the background. Progress arrives as
+	 *  `DrainProgress` events and the end as `DrainFinished`; returns the drain id.
+	 */
+	cmdDrainNode: (node: string, timeoutSecs: number, options?: InvokeOptions) => __TAURI_INVOKE<string>("cmd_drain_node", { node, timeoutSecs }, options),
+	/**
+	 *  Stop following a drain. Pods already evicted stay evicted and the node
+	 *  stays cordoned.
+	 */
+	cmdCancelDrain: (drainId: string, options?: InvokeOptions) => __TAURI_INVOKE<null>("cmd_cancel_drain", { drainId }, options),
 };
 
 /** Events */
 export const events = {
+	drainFinished: makeEvent<DrainFinished, DrainFinished>("drain-finished"),
+	drainProgress: makeEvent<DrainProgress, DrainProgress>("drain-progress"),
 	execClosed: makeEvent<ExecClosed, ExecClosed>("exec-closed"),
 	execOutput: makeEvent<ExecOutput, ExecOutput>("exec-output"),
 	podLog: makeEvent<PodLog, PodLog>("pod-log"),
@@ -81,6 +104,37 @@ export const events = {
 export type AccessResult = {
 	id: string,
 	allowed: boolean,
+};
+
+/**  One action offered for a kind. */
+export type ActionDef = {
+	id: ActionId,
+	label: string,
+	/**
+	 *  Needs a confirmation naming the object(s). (Scale asks again when the
+	 *  target is 0, see [`scale_is_destructive`].)
+	 */
+	destructive: boolean,
+	/**  The confirmation also makes the user type the object's name. */
+	type_to_confirm: boolean,
+	input: ActionInput,
+};
+
+export type ActionId = "delete" | "forceDelete" | "scale" | "restart" | "cordon" | "uncordon" | "drain" | "trigger" | "suspend" | "resume";
+
+/**  An extra value the action needs before it can run. */
+export type ActionInput = 
+/**  Nothing more is needed. */
+"none" | 
+/**  A non-negative whole number of replicas. */
+"replicas";
+
+/**  Outcome of one object in a bulk delete. */
+export type BulkItemResult = {
+	/**  `namespace/name`, or `name` if cluster scoped. */
+	key: string,
+	/**  Plain-words reason; empty when the delete was accepted. */
+	error: string,
 };
 
 /**  Where a kind appears in the sidebar. */
@@ -129,6 +183,41 @@ export type ContextInfo = {
 	current: boolean,
 };
 
+/**  Progress of a drain. */
+export type DrainEvent = { type: "cordoned"; node: string } | 
+/**  What the drain is going to do. */
+{ type: "planned"; to_evict: number; 
+/**  DaemonSet, mirror and already terminating pods left alone. */
+skipped: number; 
+/**  Of those to evict, pods without a controller: nothing recreates them. */
+unmanaged: number } | { type: "evicted"; namespace: string; name: string } | 
+/**  A PodDisruptionBudget refused the eviction; retrying. */
+{ type: "waitingOnPdb"; namespace: string; name: string; message: string } | { type: "failed"; namespace: string; name: string; error: string };
+
+/**
+ *  A node drain ended. `error` is empty when it ran to the end (see
+ *  `summary`) and says why not otherwise (for instance 403 on cordon).
+ */
+export type DrainFinished = {
+	drainId: string,
+	summary: DrainSummary,
+	error: string,
+};
+
+/**  Progress of a node drain started by `cmd_drain_node`. */
+export type DrainProgress = {
+	drainId: string,
+	event: DrainEvent,
+};
+
+export type DrainSummary = {
+	evicted: number,
+	failed: number,
+	skipped: number,
+	/**  Evicted pods that had not finished terminating when the timeout hit. */
+	still_terminating: number,
+};
+
 export type EventInfo = {
 	kind: string,
 	reason: string,
@@ -174,6 +263,13 @@ export type NodeUsage = {
 	cpu_capacity_millicores: number,
 	memory_bytes: number,
 	memory_capacity_bytes: number,
+};
+
+/**  One object of a bulk delete. */
+export type ObjectId = {
+	/**  Empty for cluster-scoped kinds. */
+	namespace: string,
+	name: string,
 };
 
 export type Overview = {
@@ -280,6 +376,8 @@ export type ResourceKind = {
 	verbs: string[],
 	short_names: string[],
 	columns: ColumnDef[],
+	/**  What can be done to objects of this kind ([`crate::actions::actions_for`]). */
+	actions: ActionDef[],
 };
 
 /**  Identifies a resource type well enough to build an `Api<DynamicObject>`. */

@@ -13,11 +13,17 @@ use std::time::Duration;
 
 use anyhow::{bail, ensure, Context, Result};
 use futures::StreamExt;
-use k8s_openapi::api::apps::v1::Deployment;
-use k8s_openapi::api::core::v1::{Namespace, Pod};
+use k8s_openapi::api::apps::v1::{Deployment, ReplicaSet};
+use k8s_openapi::api::batch::v1::{CronJob, Job};
+use k8s_openapi::api::core::v1::{ConfigMap, Namespace, Node, Pod};
+use k8s_openapi::api::policy::v1::PodDisruptionBudget;
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 use kube::api::{Api, DeleteParams, Patch, PatchParams, PostParams};
 use kube::Client;
+use kubeloupe::actions::{
+    self, delete_many, drain_node, force_delete_pod, rollout_restart, scale, set_suspended,
+    set_unschedulable, trigger_cronjob, DrainEvent, DrainOptions,
+};
 use kubeloupe::resources::{
     self, apply_resource_yaml, delete_resource, get_resource_detail, get_resource_yaml,
     list_resources, Category, ResourceKind,
@@ -976,4 +982,463 @@ async fn workload_logs_follow_a_rollout_restart() -> Result<()> {
         result
     })
     .await
+}
+
+// ---------------------------------------------------------------------------
+// Resource actions (#4).
+// ---------------------------------------------------------------------------
+
+fn sleeper_deployment(name: &str, replicas: i32, extra_labels: serde_json::Value) -> Deployment {
+    let mut labels = serde_json::json!({ "app": name });
+    for (k, v) in extra_labels.as_object().into_iter().flatten() {
+        labels[k] = v.clone();
+    }
+    serde_json::from_value(serde_json::json!({
+        "apiVersion": "apps/v1", "kind": "Deployment",
+        "metadata": { "name": name },
+        "spec": {
+            "replicas": replicas,
+            "selector": { "matchLabels": { "app": name } },
+            "template": {
+                "metadata": { "labels": labels },
+                "spec": {
+                    "terminationGracePeriodSeconds": 0,
+                    "containers": [{
+                        "name": "c", "image": "busybox:1.36",
+                        "command": ["sh", "-c", "sleep 3600"]
+                    }]
+                }
+            }
+        }
+    }))
+    .unwrap()
+}
+
+fn cronjob_named(name: &str) -> CronJob {
+    serde_json::from_value(serde_json::json!({
+        "apiVersion": "batch/v1", "kind": "CronJob",
+        "metadata": { "name": name },
+        "spec": {
+            // Never fires on its own during a test.
+            "schedule": "0 0 1 1 *",
+            "jobTemplate": { "spec": { "template": { "spec": {
+                "restartPolicy": "Never",
+                "containers": [{ "name": "c", "image": "busybox:1.36", "command": ["true"] }]
+            }}}}
+        }
+    }))
+    .unwrap()
+}
+
+#[tokio::test]
+#[ignore]
+async fn action_scale_changes_replicas() -> Result<()> {
+    in_temp_ns("kl-it-scale", |client, ns| async move {
+        let deployments: Api<Deployment> = Api::namespaced(client.clone(), &ns);
+        deployments
+            .create(
+                &PostParams::default(),
+                &sleeper_deployment("web", 1, serde_json::json!({})),
+            )
+            .await?;
+        let kind = kind_named(&client, "deployments").await?;
+        scale(&client, &kind.resource, &ns, "web", 2).await?;
+        eventually("spec.replicas == 2", TIMEOUT, || async {
+            let d = deployments.get("web").await?;
+            Ok((d.spec.and_then(|s| s.replicas) == Some(2)).then_some(()))
+        })
+        .await?;
+        // Scale to zero removes the pods.
+        scale(&client, &kind.resource, &ns, "web", 0).await?;
+        eventually("no pods", TIMEOUT, || async {
+            let pods: Api<Pod> = Api::namespaced(client.clone(), &ns);
+            Ok(pods
+                .list(&Default::default())
+                .await?
+                .items
+                .is_empty()
+                .then_some(()))
+        })
+        .await?;
+        // A negative count and a kind without /scale are refused.
+        ensure!(scale(&client, &kind.resource, &ns, "web", -1)
+            .await
+            .is_err());
+        let cms = kind_named(&client, "configmaps").await?;
+        ensure!(scale(&client, &cms.resource, &ns, "x", 1).await.is_err());
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+#[ignore]
+async fn action_rollout_restart_adds_annotation_and_replicaset() -> Result<()> {
+    in_temp_ns("kl-it-restart", |client, ns| async move {
+        let deployments: Api<Deployment> = Api::namespaced(client.clone(), &ns);
+        deployments
+            .create(
+                &PostParams::default(),
+                &sleeper_deployment("web", 1, serde_json::json!({})),
+            )
+            .await?;
+        let replicasets: Api<ReplicaSet> = Api::namespaced(client.clone(), &ns);
+        eventually("first ReplicaSet", TIMEOUT, || async {
+            Ok((replicasets.list(&Default::default()).await?.items.len() == 1).then_some(()))
+        })
+        .await?;
+
+        let kind = kind_named(&client, "deployments").await?;
+        rollout_restart(&client, &kind.resource, &ns, "web").await?;
+
+        let d = deployments.get("web").await?;
+        let ann = d
+            .spec
+            .and_then(|s| s.template.metadata)
+            .and_then(|m| m.annotations)
+            .unwrap_or_default();
+        let stamp = ann
+            .get(actions::RESTARTED_AT)
+            .context("restartedAt annotation missing")?;
+        ensure!(
+            chrono::DateTime::parse_from_rfc3339(stamp).is_ok(),
+            "not RFC 3339: {stamp}"
+        );
+        eventually("a second ReplicaSet", TIMEOUT, || async {
+            Ok((replicasets.list(&Default::default()).await?.items.len() >= 2).then_some(()))
+        })
+        .await
+    })
+    .await
+}
+
+#[tokio::test]
+#[ignore]
+async fn action_trigger_cronjob_creates_owned_job() -> Result<()> {
+    in_temp_ns("kl-it-trigger", |client, ns| async move {
+        let cronjobs: Api<CronJob> = Api::namespaced(client.clone(), &ns);
+        let cj = cronjobs
+            .create(&PostParams::default(), &cronjob_named("nightly"))
+            .await?;
+        let job_name = trigger_cronjob(&client, &ns, "nightly").await?;
+        ensure!(job_name.starts_with("nightly-manual-"), "{job_name}");
+
+        let jobs: Api<Job> = Api::namespaced(client.clone(), &ns);
+        let job = jobs.get(&job_name).await?;
+        let owner = job
+            .metadata
+            .owner_references
+            .as_ref()
+            .and_then(|o| o.first())
+            .context("job has no owner reference")?;
+        ensure!(owner.kind == "CronJob" && owner.name == "nightly");
+        ensure!(Some(&owner.uid) == cj.metadata.uid.as_ref());
+        ensure!(
+            job.metadata
+                .annotations
+                .as_ref()
+                .and_then(|a| a.get("cronjob.kubernetes.io/instantiate"))
+                .map(String::as_str)
+                == Some("manual")
+        );
+        // Two triggers make two distinct jobs.
+        let second = trigger_cronjob(&client, &ns, "nightly").await?;
+        ensure!(second != job_name);
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+#[ignore]
+async fn action_suspend_and_resume_cronjob() -> Result<()> {
+    in_temp_ns("kl-it-suspend", |client, ns| async move {
+        let cronjobs: Api<CronJob> = Api::namespaced(client.clone(), &ns);
+        cronjobs
+            .create(&PostParams::default(), &cronjob_named("nightly"))
+            .await?;
+        let suspended = || async {
+            Ok::<_, anyhow::Error>(
+                cronjobs
+                    .get("nightly")
+                    .await?
+                    .spec
+                    .and_then(|s| s.suspend)
+                    .unwrap_or(false),
+            )
+        };
+        set_suspended(&client, &ns, "nightly", true).await?;
+        ensure!(suspended().await?);
+        set_suspended(&client, &ns, "nightly", false).await?;
+        ensure!(!suspended().await?);
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+#[ignore]
+async fn action_bulk_delete_reports_each_object() -> Result<()> {
+    in_temp_ns("kl-it-bulk", |client, ns| async move {
+        let cms: Api<ConfigMap> = Api::namespaced(client.clone(), &ns);
+        for n in ["a", "b", "c"] {
+            let cm: ConfigMap = serde_json::from_value(
+                serde_json::json!({"metadata": {"name": n}, "data": {"k": "v"}}),
+            )?;
+            cms.create(&PostParams::default(), &cm).await?;
+        }
+        let kind = kind_named(&client, "configmaps").await?;
+        let items: Vec<(String, String)> = ["a", "b", "c", "never-existed"]
+            .iter()
+            .map(|n| (ns.clone(), n.to_string()))
+            .collect();
+        let results = delete_many(&client, &kind.resource, &items).await;
+        ensure!(results.len() == 4, "{results:?}");
+        for r in &results[..3] {
+            ensure!(r.error.is_empty(), "{r:?}");
+        }
+        let missing = results[3].error.as_str();
+        ensure!(missing.starts_with("Already gone"), "{missing}");
+        let left: Vec<String> = cms
+            .list(&Default::default())
+            .await?
+            .items
+            .into_iter()
+            .filter_map(|c| c.metadata.name)
+            .filter(|n| ["a", "b", "c"].contains(&n.as_str()))
+            .collect();
+        ensure!(left.is_empty(), "still there: {left:?}");
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+#[ignore]
+async fn action_force_delete_removes_a_stuck_pod() -> Result<()> {
+    in_temp_ns("kl-it-force", |client, ns| async move {
+        let pods: Api<Pod> = Api::namespaced(client.clone(), &ns);
+        // A long grace period and a shell that ignores SIGTERM: a normal
+        // delete leaves the pod Terminating.
+        let pod: Pod = serde_json::from_value(serde_json::json!({
+            "apiVersion": "v1", "kind": "Pod",
+            "metadata": { "name": "stuck" },
+            "spec": {
+                "terminationGracePeriodSeconds": 600,
+                "containers": [{
+                    "name": "c", "image": "busybox:1.36",
+                    "command": ["sh", "-c", "trap '' TERM; while true; do sleep 1; done"]
+                }]
+            }
+        }))?;
+        pods.create(&PostParams::default(), &pod).await?;
+        wait_running(&client, &ns, "stuck").await?;
+
+        let kind = kind_named(&client, "pods").await?;
+        delete_resource(&client, &kind.resource, &ns, "stuck").await?;
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let p = pods.get("stuck").await?;
+        ensure!(
+            p.metadata.deletion_timestamp.is_some(),
+            "a plain delete should leave the pod terminating"
+        );
+
+        force_delete_pod(&client, &ns, "stuck").await?;
+        eventually("pod gone", Duration::from_secs(30), || async {
+            Ok(pods.get_opt("stuck").await?.is_none().then_some(()))
+        })
+        .await?;
+        // Deleting what is already gone is a plain-words 404.
+        let err = force_delete_pod(&client, &ns, "stuck").await.unwrap_err();
+        ensure!(
+            actions::describe_error(&err).starts_with("Already gone"),
+            "{err:#}"
+        );
+        Ok(())
+    })
+    .await
+}
+
+/// The worker node: the one that is not a control plane.
+async fn worker_node(client: &Client) -> Result<String> {
+    let nodes: Api<Node> = Api::all(client.clone());
+    nodes
+        .list(&Default::default())
+        .await?
+        .items
+        .into_iter()
+        .find(|n| {
+            !n.metadata
+                .labels
+                .iter()
+                .flatten()
+                .any(|(k, _)| k == "node-role.kubernetes.io/control-plane")
+        })
+        .and_then(|n| n.metadata.name)
+        .context("no worker node in the test cluster")
+}
+
+async fn unschedulable(client: &Client, node: &str) -> Result<bool> {
+    let nodes: Api<Node> = Api::all(client.clone());
+    Ok(nodes
+        .get(node)
+        .await?
+        .spec
+        .and_then(|s| s.unschedulable)
+        .unwrap_or(false))
+}
+
+fn pinned_deployment(name: &str, node: &str, replicas: i32, drain_label: &str) -> Deployment {
+    let mut d = sleeper_deployment(name, replicas, serde_json::json!({ "kl-it": drain_label }));
+    d.spec
+        .as_mut()
+        .unwrap()
+        .template
+        .spec
+        .as_mut()
+        .unwrap()
+        .node_selector = Some([("kubernetes.io/hostname".to_string(), node.to_string())].into());
+    d
+}
+
+/// Cordon, uncordon and drain the shared kind cluster's worker. Named `zz_`
+/// so it runs last in a single-threaded run; the drain is limited to this
+/// test's own pods with a label selector so the demo workload is never
+/// evicted. The worker is made schedulable again whatever happens.
+#[tokio::test]
+#[ignore]
+async fn zz_node_cordon_uncordon_and_drain_respects_pdb() -> Result<()> {
+    let client = connect().await?;
+    let node = worker_node(&client).await?;
+    let result = in_temp_ns_with(&client, "kl-it-drain", |ns| {
+        let client = client.clone();
+        let node = node.clone();
+        async move { drain_scenario(&client, &ns, &node).await }
+    })
+    .await;
+    // Restore the shared node even if the scenario failed half way.
+    let restore = set_unschedulable(&client, &node, false).await;
+    result?;
+    restore?;
+    ensure!(
+        !unschedulable(&client, &node).await?,
+        "{node} is still cordoned"
+    );
+    Ok(())
+}
+
+async fn drain_scenario(client: &Client, ns: &str, node: &str) -> Result<()> {
+    // Cordon and uncordon.
+    set_unschedulable(client, node, true).await?;
+    ensure!(unschedulable(client, node).await?);
+    set_unschedulable(client, node, false).await?;
+    ensure!(!unschedulable(client, node).await?);
+
+    // Part 1: a 2-replica deployment behind a PDB that needs 1 available.
+    let deployments: Api<Deployment> = Api::namespaced(client.clone(), ns);
+    deployments
+        .create(
+            &PostParams::default(),
+            &pinned_deployment("guarded", node, 2, "drain-pdb"),
+        )
+        .await?;
+    let pdbs: Api<PodDisruptionBudget> = Api::namespaced(client.clone(), ns);
+    let pdb: PodDisruptionBudget = serde_json::from_value(serde_json::json!({
+        "apiVersion": "policy/v1", "kind": "PodDisruptionBudget",
+        "metadata": { "name": "guarded" },
+        "spec": { "minAvailable": 1, "selector": { "matchLabels": { "app": "guarded" } } }
+    }))?;
+    pdbs.create(&PostParams::default(), &pdb).await?;
+    let pods: Api<Pod> = Api::namespaced(client.clone(), ns);
+    let running = |app: &'static str| {
+        let pods = pods.clone();
+        async move {
+            let list = pods
+                .list(&kube::api::ListParams::default().labels(&format!("app={app}")))
+                .await?;
+            Ok::<_, anyhow::Error>(
+                list.items
+                    .iter()
+                    .filter(|p| {
+                        p.metadata.deletion_timestamp.is_none()
+                            && p.status.as_ref().and_then(|s| s.phase.as_deref()) == Some("Running")
+                    })
+                    .count(),
+            )
+        }
+    };
+    eventually("2 guarded pods running", TIMEOUT, || async {
+        Ok((running("guarded").await? == 2).then_some(()))
+    })
+    .await?;
+
+    let events: Arc<Mutex<Vec<DrainEvent>>> = Arc::default();
+    let sink = events.clone();
+    let opts = DrainOptions {
+        timeout: Duration::from_secs(20),
+        pod_selector: Some("kl-it=drain-pdb".to_string()),
+    };
+    let summary = within(
+        "drain with PDB",
+        Duration::from_secs(60),
+        drain_node(client, node, &opts, move |e| sink.lock().unwrap().push(e)),
+    )
+    .await?;
+    let seen = events.lock().unwrap().clone();
+    ensure!(
+        matches!(seen.first(), Some(DrainEvent::Cordoned { .. })),
+        "{seen:?}"
+    );
+    ensure!(
+        seen.iter()
+            .any(|e| matches!(e, DrainEvent::Planned { to_evict: 2, .. })),
+        "{seen:?}"
+    );
+    ensure!(
+        seen.iter()
+            .any(|e| matches!(e, DrainEvent::WaitingOnPdb { .. })),
+        "the PDB never blocked an eviction: {seen:?}"
+    );
+    // One pod could go; the PDB held the other back until the timeout.
+    ensure!(
+        summary.evicted == 1 && summary.failed == 1,
+        "{summary:?} {seen:?}"
+    );
+    ensure!(!summary.complete());
+    ensure!(
+        seen.iter()
+            .any(|e| matches!(e, DrainEvent::Failed { error, .. }
+            if error.contains("PodDisruptionBudget"))),
+        "{seen:?}"
+    );
+    ensure!(
+        running("guarded").await? >= 1,
+        "the PDB did not keep a pod up"
+    );
+    ensure!(unschedulable(client, node).await?, "drain should cordon");
+
+    // Part 2: no PDB, everything goes.
+    set_unschedulable(client, node, false).await?;
+    deployments
+        .create(
+            &PostParams::default(),
+            &pinned_deployment("free", node, 1, "drain-free"),
+        )
+        .await?;
+    eventually("free pod running", TIMEOUT, || async {
+        Ok((running("free").await? == 1).then_some(()))
+    })
+    .await?;
+    let opts = DrainOptions {
+        timeout: Duration::from_secs(60),
+        pod_selector: Some("kl-it=drain-free".to_string()),
+    };
+    let summary = within(
+        "free drain",
+        Duration::from_secs(90),
+        drain_node(client, node, &opts, |_| {}),
+    )
+    .await?;
+    ensure!(summary.complete() && summary.evicted == 1, "{summary:?}");
+    Ok(())
 }
