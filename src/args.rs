@@ -224,6 +224,36 @@ pub enum Commands {
         #[arg(last = true, required = true)]
         command: Vec<String>,
     },
+    /// Open a shell in a pod through an ephemeral debug container that shares
+    /// a container's processes. Works on images without a shell; the
+    /// container cannot be removed and stays until the pod is deleted.
+    Debug {
+        /// Pod name
+        pod: String,
+        /// Pod namespace (default: `default`)
+        #[arg(short, long)]
+        namespace: Option<String>,
+        /// Container whose processes the debug container sees (default: the
+        /// pod's first container)
+        #[arg(short, long)]
+        container: Option<String>,
+        /// Image of the debug container, e.g. `nicolaka/netshoot` for
+        /// network tools
+        #[arg(long, default_value = kubeloupe::debug::DEFAULT_DEBUG_IMAGE)]
+        image: String,
+    },
+    /// Open a root shell on a node through a privileged pod (deleted when the
+    /// shell exits)
+    #[command(name = "node-shell")]
+    NodeShell {
+        node: String,
+        /// Namespace of the privileged pod; it must allow privileged pods
+        #[arg(short, long, default_value = kubeloupe::node_shell::NODE_SHELL_NAMESPACE)]
+        namespace: String,
+        /// Image of the pod; it needs `nsenter`
+        #[arg(long, default_value = kubeloupe::node_shell::NODE_SHELL_IMAGE)]
+        image: String,
+    },
     /// Helm releases, read from the cluster (no helm binary needed)
     Helm {
         #[command(subcommand)]
@@ -366,6 +396,40 @@ mod tests {
         assert_eq!(ports, vec!["8080:80", ":http"]);
         assert_eq!(namespace.as_deref(), Some("demo"));
         assert!(Cli::try_parse_from(["kubeloupe", "port-forward", "svc/api"]).is_err());
+    }
+
+    #[test]
+    fn debug_and_node_shell() {
+        let Commands::Debug {
+            pod,
+            namespace,
+            container,
+            image,
+        } = parse(&["debug", "web-1", "-n", "demo", "-c", "app"]).command
+        else {
+            panic!("not debug");
+        };
+        assert_eq!((pod.as_str(), image.as_str()), ("web-1", "busybox:1.37"));
+        assert_eq!(namespace.as_deref(), Some("demo"));
+        assert_eq!(container.as_deref(), Some("app"));
+        let Commands::Debug { image, .. } =
+            parse(&["debug", "p", "--image", "nicolaka/netshoot"]).command
+        else {
+            panic!("not debug");
+        };
+        assert_eq!(image, "nicolaka/netshoot");
+        let Commands::NodeShell {
+            node,
+            namespace,
+            image,
+        } = parse(&["node-shell", "worker"]).command
+        else {
+            panic!("not node-shell");
+        };
+        assert_eq!(
+            (node.as_str(), namespace.as_str(), image.as_str()),
+            ("worker", "kube-system", "busybox:1.37")
+        );
     }
 
     #[test]

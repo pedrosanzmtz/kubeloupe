@@ -6,6 +6,7 @@ import { PORT_FORWARDS_VIEW } from "../forwards";
 import { HELM_VIEW } from "../helm";
 import { contextToRestore, namespacesToRestore } from "../settings";
 import { closeDetail, detail, openDetail } from "./detail.svelte";
+import { checkLeftovers } from "./debug.svelte";
 import { contextSettings, loadSettings, settings, updateContext, updateSettings } from "./settings.svelte";
 import { closeAllDockTabs, dock } from "./dock.svelte";
 import { whenDiscarded } from "./unsaved.svelte";
@@ -301,6 +302,7 @@ export async function switchContext(name: string) {
   await loadNamespaces();
   await restoreScope();
   refresh();
+  void checkLeftovers();
 }
 
 /**

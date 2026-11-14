@@ -58,6 +58,10 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::actions::cmd_bulk_delete,
             commands::actions::cmd_drain_node,
             commands::actions::cmd_cancel_drain,
+            commands::debug::cmd_debug_start,
+            commands::debug::cmd_node_shell_start,
+            commands::debug::cmd_node_shell_leftovers,
+            commands::debug::cmd_node_shell_cleanup,
             commands::helm::cmd_helm_list,
             commands::helm::cmd_helm_charts,
             commands::helm::cmd_helm_get,
@@ -141,8 +145,24 @@ fn main() {
                 }
                 // Kill the local shells and delete their temp kubeconfigs.
                 state::stop_all_local_shells(&app.state::<AppState>());
+                delete_session_pods(app);
             }
         });
+}
+
+/// On quit, delete the pods node shells created (bounded, so a dead cluster
+/// cannot keep the app from exiting).
+fn delete_session_pods(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    let state = app.state::<AppState>();
+    let cleanups = state::take_all_exec(&state.exec_sessions);
+    if cleanups.is_empty() {
+        return;
+    }
+    tauri::async_runtime::block_on(async {
+        let all = futures::future::join_all(cleanups.into_iter().map(|c| c.run()));
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), all).await;
+    });
 }
 
 #[cfg(test)]

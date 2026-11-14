@@ -1,8 +1,8 @@
 //! Interactive terminal sessions in pods.
 
-use crate::state::{client, next_session, AppState, ExecSession};
+use crate::state::{client, next_session, AppState, ExecSession, SessionCleanup};
 use futures::SinkExt;
-use kube::api::TerminalSize;
+use kube::api::{AttachedProcess, TerminalSize};
 use kubeloupe::exec_pod;
 use serde::Serialize;
 use specta::Type;
@@ -47,10 +47,38 @@ pub(crate) async fn cmd_exec_start(
     rows: u16,
 ) -> Result<String, String> {
     let client = client(&state).await?;
-    let mut attached = exec_pod(&client, &namespace, &name, container.as_deref())
+    let attached = exec_pod(&client, &namespace, &name, container.as_deref())
         .await
         .map_err(|e| e.to_string())?;
     let session = next_session("exec");
+    start_session(&app, &state, session.clone(), attached, cols, rows, None).await;
+    Ok(session)
+}
+
+/// Write a line of text into a terminal session (progress, notes).
+pub(crate) fn emit_note(app: &AppHandle, session: &str, text: &str) {
+    let _ = ExecOutput {
+        session: session.to_string(),
+        stream: "stderr".to_string(),
+        data: format!("\x1b[90m{text}\x1b[0m\r\n"),
+    }
+    .emit(app);
+}
+
+/// Pump an attached or exec'd process to `exec-output` events and register
+/// it as `session`, so `cmd_exec_input`, `cmd_exec_resize` and
+/// `cmd_exec_close` drive it. `cleanup` runs when the session ends or is
+/// closed.
+pub(crate) async fn start_session(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    session: String,
+    mut attached: AttachedProcess,
+    cols: u16,
+    rows: u16,
+    cleanup: Option<SessionCleanup>,
+) {
+    let app = app.clone();
     let (stdin_tx, mut stdin_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
     let mut stdin_writer = attached.stdin();
     let mut stdout_reader = attached.stdout();
@@ -86,6 +114,7 @@ pub(crate) async fn cmd_exec_start(
             }
         });
     }
+    let task_cleanup = cleanup.clone();
     let task = tauri::async_runtime::spawn(async move {
         let stdin_pump = async {
             if let Some(mut w) = stdin_writer.take() {
@@ -139,6 +168,9 @@ pub(crate) async fn cmd_exec_start(
             () = async { tokio::join!(stdin_pump, stdout_pump, stderr_pump); } => {},
             _ = attached.join() => {},
         }
+        if let Some(c) = task_cleanup {
+            c.run().await;
+        }
         let _ = ExecClosed(session_id).emit(&app);
     });
     state.exec_sessions.lock().unwrap().insert(
@@ -147,9 +179,9 @@ pub(crate) async fn cmd_exec_start(
             stdin_tx,
             size_tx,
             task,
+            cleanup,
         },
     );
-    Ok(session)
 }
 
 #[tauri::command]
@@ -204,9 +236,12 @@ pub(crate) async fn cmd_exec_close(
     state: State<'_, AppState>,
     session: String,
 ) -> Result<(), String> {
-    let mut sessions = state.exec_sessions.lock().unwrap();
-    if let Some(entry) = sessions.remove(&session) {
+    let entry = state.exec_sessions.lock().unwrap().remove(&session);
+    if let Some(entry) = entry {
         entry.task.abort();
+        if let Some(c) = entry.cleanup {
+            tauri::async_runtime::spawn(c.run());
+        }
     }
     Ok(())
 }

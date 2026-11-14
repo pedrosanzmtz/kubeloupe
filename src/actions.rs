@@ -51,6 +51,12 @@ pub enum ActionId {
     /// Start a port-forward. Long-running, so the UI and the CLI handle it
     /// themselves ([`crate::PortForward`]); [`run_action`] refuses it.
     PortForward,
+    /// Add an ephemeral debug container and attach to it. Interactive, so
+    /// handled like [`ActionId::PortForward`] ([`crate::debug`]).
+    Debug,
+    /// A root shell on a node through a privileged pod. Interactive
+    /// ([`crate::node_shell`]).
+    NodeShell,
 }
 
 /// An extra value the action needs before it can run.
@@ -64,6 +70,8 @@ pub enum ActionInput {
     Replicas,
     /// A remote port (number or name) and an optional local port.
     Port,
+    /// The container to debug and the debug image.
+    Debug,
 }
 
 /// One action offered for a kind.
@@ -109,6 +117,7 @@ pub fn actions_for(r: &ResourceRef, verbs: &[String]) -> Vec<ActionDef> {
         }
         ("apps", "DaemonSet") => out.push(def(Restart, "Rollout restart")),
         ("", "Node") => {
+            out.push(def(NodeShell, "Shell"));
             out.push(def(Cordon, "Cordon"));
             out.push(def(Uncordon, "Uncordon"));
             out.push(ActionDef {
@@ -134,6 +143,12 @@ pub fn actions_for(r: &ResourceRef, verbs: &[String]) -> Vec<ActionDef> {
         out.push(ActionDef {
             input: ActionInput::Port,
             ..def(PortForward, "Port forward…")
+        });
+    }
+    if (r.group.as_str(), r.kind.as_str()) == ("", "Pod") {
+        out.push(ActionDef {
+            input: ActionInput::Debug,
+            ..def(Debug, "Debug…")
         });
     }
     if verbs.iter().any(|v| v == "delete") {
@@ -162,7 +177,7 @@ pub fn scale_is_destructive(replicas: i32) -> bool {
 // ---------------------------------------------------------------------------
 
 /// The API error behind `err`, if any, as `(http code, message)`.
-fn api_error(err: &anyhow::Error) -> Option<(u16, String)> {
+pub(crate) fn api_error(err: &anyhow::Error) -> Option<(u16, String)> {
     err.chain()
         .find_map(|e| match e.downcast_ref::<kube::Error>() {
             Some(kube::Error::Api(r)) => Some((r.code, r.message.clone())),
@@ -309,7 +324,7 @@ pub fn manual_job_name(cronjob: &str, suffix: &str) -> String {
 
 /// A random 5 character suffix from the alphabet Kubernetes uses for
 /// generated names (no vowels, no look-alikes).
-fn random_suffix() -> String {
+pub(crate) fn random_suffix() -> String {
     use std::hash::{BuildHasher, Hasher};
     const ALPHABET: &[u8] = b"bcdfghjklmnpqrstvwxz2456789";
     let mut n = std::collections::hash_map::RandomState::new()
@@ -475,6 +490,10 @@ pub async fn run_action(
         }
         ActionId::Drain => bail!("drain reports progress: use drain_node"),
         ActionId::PortForward => bail!("a port-forward keeps running: use PortForward::start"),
+        ActionId::Debug => bail!("a debug session is interactive: use debug::add_debug_container"),
+        ActionId::NodeShell => {
+            bail!("a node shell is interactive: use node_shell::create_node_shell")
+        }
     })
 }
 
@@ -862,12 +881,18 @@ mod tests {
         assert_eq!(ids("apps", "ReplicaSet", &d), [Scale, PortForward, Delete]);
         assert_eq!(ids("apps", "DaemonSet", &d), [Restart, PortForward, Delete]);
         assert_eq!(ids("", "Service", &d), [PortForward, Delete]);
-        assert_eq!(ids("", "Node", &d), [Cordon, Uncordon, Drain, Delete]);
+        assert_eq!(
+            ids("", "Node", &d),
+            [NodeShell, Cordon, Uncordon, Drain, Delete]
+        );
         assert_eq!(
             ids("batch", "CronJob", &d),
             [Trigger, Suspend, Resume, Delete]
         );
-        assert_eq!(ids("", "Pod", &d), [PortForward, Delete, ForceDelete]);
+        assert_eq!(
+            ids("", "Pod", &d),
+            [PortForward, Debug, Delete, ForceDelete]
+        );
         assert_eq!(ids("", "ConfigMap", &d), [Delete]);
         // Same kind name in another group gets nothing special.
         assert_eq!(ids("example.com", "Deployment", &d), [Delete]);
@@ -901,6 +926,8 @@ mod tests {
             find("", "Service", ActionId::PortForward).input,
             ActionInput::Port
         );
+        assert_eq!(find("", "Pod", ActionId::Debug).input, ActionInput::Debug);
+        assert!(!find("", "Node", ActionId::NodeShell).destructive);
         assert!(scale_is_destructive(0));
         assert!(!scale_is_destructive(1));
     }

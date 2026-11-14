@@ -3,6 +3,7 @@
 
 pub(crate) mod actions;
 pub(crate) mod cluster;
+pub(crate) mod debug;
 pub(crate) mod exec;
 pub(crate) mod helm;
 pub(crate) mod local_shell;

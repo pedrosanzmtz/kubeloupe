@@ -60,6 +60,12 @@ Svelte) and a CLI, both built on the same Rust core.
   scale, rollout restart, cordon/uncordon, drain (with progress, respecting
   PodDisruptionBudgets), trigger/suspend/resume a CronJob, delete and force
   delete. Destructive ones ask for confirmation and list the exact objects.
+- **Debugging**: "Debug…" on a pod adds an ephemeral debug container
+  (`busybox:1.37` by default, or e.g. `nicolaka/netshoot`) that sees a chosen
+  container's processes, and attaches to it in a dock tab. It works on images
+  without a shell; the container stays in the pod until the pod is deleted.
+  "Shell" on a node opens a root shell on the host through a privileged pod
+  in `kube-system`, deleted when the tab closes or the app quits.
 - **Keyboard first**: a command palette (Ctrl+K / Cmd+K) jumps to any kind
   (`deploy`, `svc`, `cm` work), namespace, context or object and runs
   actions (`>`); `ns ` and `ctx ` narrow it to namespaces or contexts.
@@ -114,6 +120,8 @@ namespace; lists default to all namespaces.
 | `kubeloupe logs deploy/<name>` (also `sts/`, `ds/`, `job/`) | The logs of every pod of a workload, as `[pod] line` |
 | `kubeloupe top [pods\|nodes] [-n NS]` | CPU/memory usage (needs metrics-server); `-n` limits pods to one namespace |
 | `kubeloupe exec <pod> [-n NS] [-c CONTAINER] -- <command>` | Run a command in a pod and print its output |
+| `kubeloupe debug <pod> [-n NS] [-c CONTAINER] [--image IMAGE]` | Add an ephemeral debug container (default `busybox:1.37`) that shares the container's processes, and attach to it. Works on images without a shell; the container cannot be removed afterwards |
+| `kubeloupe node-shell <node> [-n NS] [--image IMAGE]` | A root shell on a node through a privileged pod (in `kube-system` by default; it needs Pod Security `privileged`). The pod is deleted when the shell exits |
 | `kubeloupe port-forward <target> <[local:]remote>... [-n NS]` | Forward to localhost until Ctrl-C. Target: a pod name, `svc/<name>`, `deploy/<name>` (also `pod/`, `sts/`, `rs/`, `ds/`). Ports: `8080:80`, `:80` (random local), or `80` (the same local port if free and ≥ 1024, else random); the remote port may be a port name |
 
 Actions report errors in plain words (not allowed, already gone, blocked by a

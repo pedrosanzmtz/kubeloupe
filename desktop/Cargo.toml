@@ -9,6 +9,7 @@ tauri-build = { version = "2", features = [] }
 base64 = "0.22"
 
 [dependencies]
+anyhow = "1"
 futures = "0.3"
 kube = { version = "2", features = ["ws"] }
 kubeloupe = { path = "..", features = ["specta"] }
