@@ -15,6 +15,8 @@ test("a pod forward outlives its panel and is listed, opened and stopped from Po
   const fake = await openApp(page);
   await openKind(page, "Pods");
   await row(page, "web-1").click();
+  await expect(panel(page).locator(".title")).toHaveText("demo/web-1");
+  await expect.poll(() => fake.activeDetailWatches()).toHaveLength(1);
   await panel(page).getByLabel("Pod port").fill("8080");
   await panel(page).getByLabel("Local port").fill("18080");
   await panel(page).getByRole("button", { name: "Forward", exact: true }).click();
