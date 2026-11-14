@@ -7,8 +7,10 @@ User-facing docs are in `README.md`; the plan is the roadmap issue #24.
 
 - `src/`: the core library, one module per concern (`client`, `pods`, `logs`,
   `workload_logs`, `exec`, `portforward`, `metrics`, `overview`, `watch`,
-  `actions`, `cli`), plus `src/resources/` (discovery, columns, table, ops,
-  detail). `lib.rs` re-exports them. The CLI is `src/main.rs`.
+  `actions`, `cli`, `get`, `describe`), plus `src/resources/` (discovery,
+  columns, table, ops, detail). `lib.rs` re-exports them. The CLI is
+  `src/main.rs`, with its arguments in `src/args.rs`; `tests/cli.rs` runs the
+  binary.
 - `desktop/src/`: the Tauri app. `main.rs` builds and registers everything,
   `state.rs` holds `AppState`, `commands/` has one module per concern.
 - `desktop/ui-src/`: the Svelte 5 + Vite + TypeScript UI.

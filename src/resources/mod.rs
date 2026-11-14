@@ -26,9 +26,9 @@ pub use detail::get_resource_detail;
 pub use discovery::{can_list, check_access, discover, resolve_kind};
 pub use ops::{
     apply_resource_yaml, delete_resource, dyn_api, get_resource, get_resource_yaml, list_resources,
-    FieldTakeover,
+    object_value, to_yaml, FieldTakeover,
 };
-pub use table::render_table;
+pub use table::{align_columns, render_table, table_cells, table_header};
 
 use columns::Source;
 use kube::api::ApiResource;

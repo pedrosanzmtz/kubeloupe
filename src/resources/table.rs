@@ -6,8 +6,16 @@ use crate::age_of_secs;
 /// Render rows like `kubectl get`: aligned columns, age computed here, and
 /// without the columns that only the desktop UI can fill (live metrics).
 pub fn render_table(kind: &ResourceKind, rows: &[ResourceRow]) -> String {
-    let shown: Vec<usize> = kind
-        .columns
+    let mut sorted: Vec<&ResourceRow> = rows.iter().collect();
+    sorted.sort_by(|a, b| a.key.cmp(&b.key));
+    let mut table = vec![table_header(kind)];
+    table.extend(sorted.into_iter().map(|row| table_cells(kind, row)));
+    align_columns(&table)
+}
+
+/// Indexes of the columns the CLI shows: all but live metrics.
+fn shown_columns(kind: &ResourceKind) -> impl Iterator<Item = usize> + '_ {
+    kind.columns
         .iter()
         .enumerate()
         .filter(|(_, c)| {
@@ -20,35 +28,41 @@ pub fn render_table(kind: &ResourceKind, rows: &[ResourceRow]) -> String {
             )
         })
         .map(|(i, _)| i)
-        .collect();
-    let mut table: Vec<Vec<String>> = vec![shown
-        .iter()
-        .map(|&i| kind.columns[i].label.to_uppercase())
-        .collect()];
-    let mut sorted: Vec<&ResourceRow> = rows.iter().collect();
-    sorted.sort_by(|a, b| a.key.cmp(&b.key));
-    for row in sorted {
-        table.push(
-            shown
-                .iter()
-                .map(|&i| match kind.columns[i].kind {
-                    ColumnKind::Age => age_of_secs(row.created),
-                    _ => row.cells.get(i).cloned().unwrap_or_default(),
-                })
-                .collect(),
-        );
-    }
-    let widths: Vec<usize> = (0..shown.len())
+}
+
+/// The upper-case header of [`render_table`].
+pub fn table_header(kind: &ResourceKind) -> Vec<String> {
+    shown_columns(kind)
+        .map(|i| kind.columns[i].label.to_uppercase())
+        .collect()
+}
+
+/// One row's cells as [`render_table`] prints them (age computed now).
+pub fn table_cells(kind: &ResourceKind, row: &ResourceRow) -> Vec<String> {
+    shown_columns(kind)
+        .map(|i| match kind.columns[i].kind {
+            ColumnKind::Age => age_of_secs(row.created),
+            _ => row.cells.get(i).cloned().unwrap_or_default(),
+        })
+        .collect()
+}
+
+/// Left-align every column of `table` (first row is the header), two spaces
+/// apart, without trailing whitespace.
+pub fn align_columns(table: &[Vec<String>]) -> String {
+    let cols = table.iter().map(Vec::len).max().unwrap_or(0);
+    let widths: Vec<usize> = (0..cols)
         .map(|c| {
             table
                 .iter()
-                .map(|r| r[c].chars().count())
+                .filter_map(|r| r.get(c))
+                .map(|cell| cell.chars().count())
                 .max()
                 .unwrap_or(0)
         })
         .collect();
     let mut out = String::new();
-    for r in &table {
+    for r in table {
         let line: Vec<String> = r
             .iter()
             .zip(&widths)
